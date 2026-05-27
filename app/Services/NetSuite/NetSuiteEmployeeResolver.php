@@ -8,6 +8,8 @@ use Throwable;
 
 class NetSuiteEmployeeResolver
 {
+    private const MAX_EMAIL_MATCHES = 100;
+
     /**
      * Resolve an active NetSuite employee by verified email address.
      */
@@ -23,7 +25,7 @@ class NetSuiteEmployeeResolver
             $page = BriarRose::rest()
                 ->suiteql()
                 ->query($this->employeeByEmailQuery($email), [
-                    'limit' => 2,
+                    'limit' => self::MAX_EMAIL_MATCHES,
                     'offset' => 0,
                 ])
                 ->throw()
@@ -40,16 +42,37 @@ class NetSuiteEmployeeResolver
 
         $employees = $page['items'] ?? [];
 
-        if (! is_array($employees) || count($employees) !== 1) {
+        if (! is_array($employees)) {
             Log::warning('NetSuite employee email lookup did not return exactly one match.', [
                 'email' => $email,
-                'matches' => is_array($employees) ? count($employees) : 0,
+                'matches' => 0,
             ]);
 
             return null;
         }
 
-        $employeeId = $employees[0]['id'] ?? null;
+        if (($page['hasMore'] ?? false) === true) {
+            Log::warning('NetSuite employee email lookup returned too many matches.', [
+                'email' => $email,
+            ]);
+
+            return null;
+        }
+
+        $employees = collect($employees)
+            ->filter(fn (array $employee): bool => strcasecmp((string) ($employee['type'] ?? ''), 'Employee') === 0)
+            ->values();
+
+        if ($employees->count() !== 1) {
+            Log::warning('NetSuite employee email lookup did not return exactly one employee match.', [
+                'email' => $email,
+                'matches' => $employees->count(),
+            ]);
+
+            return null;
+        }
+
+        $employeeId = $employees->first()['id'] ?? null;
 
         return is_numeric($employeeId) ? (int) $employeeId : null;
     }
@@ -57,7 +80,7 @@ class NetSuiteEmployeeResolver
     private function employeeByEmailQuery(string $email): string
     {
         return sprintf(<<<'SQL'
-            SELECT id, entityid, altname, email, isinactive, type FROM entity WHERE type = 'Employee' AND isinactive = 'F' AND lower(email) = lower('%s') ORDER BY id
+            SELECT id, entityid, altname, email, isinactive, type FROM entity WHERE isinactive = 'F' AND lower(email) = lower('%s') ORDER BY id
         SQL, $this->escapeSqlString($email));
     }
 

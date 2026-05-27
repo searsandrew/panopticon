@@ -25,12 +25,20 @@ test('verified email links the user to the matching NetSuite employee', function
         '*' => Http::response([
             'items' => [
                 [
-                    'id' => '2214',
-                    'entityid' => 'Tom Ruggles',
-                    'altname' => 'Tom Ruggles',
-                    'email' => 'truggles@choicemfg.parts',
+                    'id' => '513',
+                    'entityid' => 'Andrew Sears',
+                    'altname' => 'Andrew Sears',
+                    'email' => 'asears@choicemfg.parts',
                     'isinactive' => 'F',
                     'type' => 'Employee',
+                ],
+                [
+                    'id' => '732',
+                    'entityid' => 'Andrew Sears',
+                    'altname' => 'Andrew Sears',
+                    'email' => 'asears@choicemfg.parts',
+                    'isinactive' => 'F',
+                    'type' => 'CustJob',
                 ],
             ],
             'hasMore' => false,
@@ -38,21 +46,21 @@ test('verified email links the user to the matching NetSuite employee', function
     ]);
 
     $user = User::factory()->unverified()->create([
-        'email' => 'truggles@choicemfg.parts',
+        'email' => 'asears@choicemfg.parts',
     ]);
 
     $this->actingAs($user)->get(verificationUrlFor($user))
         ->assertRedirect(route('dashboard', absolute: false).'?verified=1');
 
-    expect($user->fresh()->netsuite_user_id)->toBe(2214);
+    expect($user->fresh()->netsuite_user_id)->toBe(513);
 
     Http::assertSent(function (Request $request): bool {
         $suiteQl = $request->data()['q'] ?? '';
 
         return parse_url($request->url(), PHP_URL_PATH) === '/services/rest/query/v1/suiteql'
-            && str_contains($suiteQl, "type = 'Employee'")
             && str_contains($suiteQl, "isinactive = 'F'")
-            && str_contains($suiteQl, "lower(email) = lower('truggles@choicemfg.parts')");
+            && str_contains($suiteQl, 'type')
+            && str_contains($suiteQl, "lower(email) = lower('asears@choicemfg.parts')");
     });
 });
 
@@ -60,8 +68,14 @@ test('verified email is not linked when NetSuite returns multiple matching emplo
     Http::fake([
         '*' => Http::response([
             'items' => [
-                ['id' => '2214'],
-                ['id' => '2215'],
+                [
+                    'id' => '2214',
+                    'type' => 'Employee',
+                ],
+                [
+                    'id' => '2215',
+                    'type' => 'Employee',
+                ],
             ],
             'hasMore' => false,
         ]),
