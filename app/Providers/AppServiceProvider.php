@@ -33,6 +33,8 @@ class AppServiceProvider extends ServiceProvider
     {
         Date::use(CarbonImmutable::class);
 
+        $this->configureMail();
+
         DB::prohibitDestructiveCommands(
             app()->isProduction(),
         );
@@ -46,5 +48,31 @@ class AppServiceProvider extends ServiceProvider
                 ->uncompromised()
             : null,
         );
+    }
+
+    /**
+     * Configure mail defaults for local development.
+     */
+    private function configureMail(): void
+    {
+        if (
+            app()->isProduction()
+            || config('mail.default') !== 'mailgun'
+            || $this->hasMailgunConfiguration()
+        ) {
+            return;
+        }
+
+        config(['mail.default' => 'log']);
+
+        if ($this->app->bound('mail.manager')) {
+            $this->app->make('mail.manager')->forgetMailers();
+        }
+    }
+
+    private function hasMailgunConfiguration(): bool
+    {
+        return filled(config('services.mailgun.domain'))
+            && filled(config('services.mailgun.secret'));
     }
 }

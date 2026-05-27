@@ -10,6 +10,14 @@ test('guests are redirected to the login page', function () {
     $response->assertRedirect(route('login'));
 });
 
+test('unverified users are redirected to the email verification notice', function () {
+    $user = User::factory()->unverified()->create();
+
+    $response = $this->actingAs($user)->get(route('dashboard'));
+
+    $response->assertRedirect(route('verification.notice'));
+});
+
 test('authenticated users can visit the dashboard and see pipeline customers', function () {
     config()->set('briar-rose.account', '1234567');
     config()->set('briar-rose.consumer_key', 'consumer-key');

@@ -1,5 +1,7 @@
 <?php
 
+use App\Providers\AppServiceProvider;
+use Illuminate\Support\Facades\Mail;
 use Laravel\Fortify\Features;
 
 beforeEach(function () {
@@ -24,4 +26,22 @@ test('new users can register', function () {
         ->assertRedirect(route('dashboard', absolute: false));
 
     $this->assertAuthenticated();
+});
+
+test('incomplete local Mailgun configuration falls back to the log mailer', function () {
+    config()->set('mail.default', 'mailgun');
+    config()->set('services.mailgun.domain', null);
+    config()->set('services.mailgun.secret', null);
+
+    app('mail.manager')->forgetMailers();
+
+    (new AppServiceProvider(app()))->boot();
+
+    expect(config('mail.default'))->toBe('log');
+
+    Mail::raw('Testing mail fallback.', function ($message) {
+        $message
+            ->to('test@example.com')
+            ->subject('Testing mail fallback');
+    });
 });
