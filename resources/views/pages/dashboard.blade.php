@@ -5,9 +5,13 @@ use Livewire\Component;
 use Searsandrew\BriarRose\Facades\BriarRose;
 
 new class extends Component {
-    private const SALES_PIPELINE_ID = 2214;
+    private ?int $netSuiteId = null;
+    private int $pageLimit = 100;
 
-    private const CUSTOMER_PAGE_LIMIT = 1000;
+    public function mount(): void
+    {
+        $this->netSuiteId = Auth::user()->netsuite_user_id;
+    }
 
     /**
      * @return array<int, array<string, mixed>>
@@ -27,7 +31,7 @@ new class extends Component {
             }
 
             $hasMore = (bool) ($page['hasMore'] ?? false);
-            $offset += self::CUSTOMER_PAGE_LIMIT;
+            $offset += $this->pageLimit;
         } while ($hasMore);
 
         return $customers;
@@ -41,7 +45,7 @@ new class extends Component {
         $page = BriarRose::rest()
             ->suiteql()
             ->query($this->salesPipelineCustomersQuery(), [
-                'limit' => self::CUSTOMER_PAGE_LIMIT,
+                'limit' => $this->pageLimit,
                 'offset' => $offset,
             ])
             ->throw()
@@ -54,7 +58,7 @@ new class extends Component {
     {
         return sprintf(<<<'SQL'
             SELECT id, entityid, companyname, firstname, lastname, email, custentity_panopticon_sales_pipeline, custentity_panopticon_comm_cadence FROM customer WHERE custentity_panopticon_sales_pipeline = %d ORDER BY id
-        SQL, self::SALES_PIPELINE_ID);}
+        SQL, $this->netSuiteId);}
     };
 ?>
 
