@@ -29,6 +29,7 @@ new class extends Component {
         'contact_person_name',
         'contact_at',
         'status',
+        'requires_follow_up',
         'submitted_at',
         'body',
     ];
@@ -73,6 +74,7 @@ new class extends Component {
                             ->where('user_id', Auth::id());
                     });
             })
+            ->orderByDesc('requires_follow_up')
             ->orderByDesc('updated_at')
             ->orderByDesc('contact_at')
             ->paginate(perPage: 10, pageName: self::COMMUNICATION_LOGS_PAGE);
@@ -140,6 +142,23 @@ new class extends Component {
         $this->showLogDetails = true;
     }
 
+    public function toggleFollowUp(string $logId): void
+    {
+        $log = $this->findLogForCurrentCustomer($logId);
+
+        Gate::authorize('update', $log);
+
+        $log->forceFill([
+            'requires_follow_up' => ! $log->requires_follow_up,
+        ])->save();
+
+        unset($this->communicationLogs);
+
+        $this->selectedLogId = $log->id;
+
+        $this->dispatch('communication-log-saved');
+    }
+
     public function updatedShowLogDetails(bool $value): void
     {
         if (! $value && ! $this->showLogHistory) {
@@ -172,7 +191,7 @@ new class extends Component {
     public function contactAtLabel(CustomerCommunicationLog $log): string
     {
         return $log->contact_at instanceof CarbonInterface
-            ? $log->contact_at->format('M j, g:i A')
+            ? $log->contact_at->copy()->timezone($this->userTimezone())->format('M j, g:i A')
             : __('N/A');
     }
 
@@ -195,6 +214,27 @@ new class extends Component {
     public function statusLabel(CustomerCommunicationLog $log): string
     {
         return $log->isDraft() ? __('Draft') : __('Submitted');
+    }
+
+    public function followUpButtonLabel(CustomerCommunicationLog $log): string
+    {
+        return $log->requires_follow_up ? __('Follow-up flagged') : __('Flag follow-up');
+    }
+
+    public function followUpButtonVariant(CustomerCommunicationLog $log): string
+    {
+        return $log->requires_follow_up ? 'filled' : 'ghost';
+    }
+
+    public function logRowClass(CustomerCommunicationLog $log): string
+    {
+        $classes = 'cursor-pointer hover:bg-zinc-50 dark:hover:bg-white/5';
+
+        if ($log->requires_follow_up) {
+            $classes .= ' bg-amber-50/70 hover:bg-amber-100/70 dark:bg-amber-500/10 dark:hover:bg-amber-500/15';
+        }
+
+        return $classes;
     }
 
     public function blockTypeBadgeColor(?string $slug): string
@@ -347,7 +387,7 @@ new class extends Component {
     public function auditCreatedAtLabel(Audit $audit): string
     {
         return $audit->created_at instanceof CarbonInterface
-            ? $audit->created_at->format('M j, g:i A')
+            ? $audit->created_at->copy()->timezone($this->userTimezone())->format('M j, g:i A')
             : __('N/A');
     }
 
@@ -358,6 +398,7 @@ new class extends Component {
             'communication_block_type_id' => __('Block type'),
             'contact_person_name' => __('Contact person'),
             'contact_at' => __('Contact date'),
+            'requires_follow_up' => __('Follow-up flag'),
             'submitted_at' => __('Submitted date'),
             'body' => __('Note'),
             default => Str::headline($attribute),
@@ -380,10 +421,14 @@ new class extends Component {
 
         if (in_array($attribute, ['contact_at', 'submitted_at'], true)) {
             try {
-                return CarbonImmutable::parse($value)->format('M j, g:i A');
+                return CarbonImmutable::parse($value)->timezone($this->userTimezone())->format('M j, g:i A');
             } catch (Throwable) {
                 return (string) $value;
             }
+        }
+
+        if ($attribute === 'requires_follow_up') {
+            return filter_var($value, FILTER_VALIDATE_BOOL) ? __('Flagged') : __('Not flagged');
         }
 
         if ($attribute === 'status') {
@@ -434,6 +479,15 @@ new class extends Component {
     {
         return ($this->customerId() > 0 && $log->netsuite_customer_id === $this->customerId())
             || $log->customer_account_number === $this->accountNumber;
+    }
+
+    private function userTimezone(): string
+    {
+        $timezone = Auth::user()?->timezone;
+
+        return is_string($timezone) && in_array($timezone, timezone_identifiers_list(), true)
+            ? $timezone
+            : (string) config('app.timezone', 'UTC');
     }
 };
 ?>
@@ -494,7 +548,7 @@ new class extends Component {
                             <flux:table.row
                                 :key="'communication-log-'.$log->id"
                                 wire:click="viewLog('{{ $log->id }}')"
-                                class="cursor-pointer hover:bg-zinc-50 dark:hover:bg-white/5"
+                                class="{{ $this->logRowClass($log) }}"
                             >
                                 <flux:table.cell class="flex min-w-0 flex-row items-center gap-2 whitespace-nowrap">
                                     <flux:avatar :name="$log->user?->name ?? __('Unknown')" color="auto" circle>
@@ -508,9 +562,16 @@ new class extends Component {
                                     {{ $this->contactAtLabel($log) }}
                                 </flux:table.cell>
                                 <flux:table.cell>
-                                    <flux:badge size="sm" inset="top bottom" color="{{ $this->statusBadgeColor($log) }}">
-                                        {{ $this->statusLabel($log) }}
-                                    </flux:badge>
+                                    <span class="flex flex-wrap items-center gap-2">
+                                        @if ($log->requires_follow_up)
+                                            <flux:badge size="sm" inset="top bottom" color="amber" icon="flag">
+                                                {{ __('Follow-up') }}
+                                            </flux:badge>
+                                        @endif
+                                        <flux:badge size="sm" inset="top bottom" color="{{ $this->statusBadgeColor($log) }}">
+                                            {{ $this->statusLabel($log) }}
+                                        </flux:badge>
+                                    </span>
                                 </flux:table.cell>
                                 <flux:table.cell class="max-w-md">
                                     <span class="block truncate whitespace-nowrap overflow-hidden">{{ $this->summaryFor($log) }}</span>
@@ -564,6 +625,9 @@ new class extends Component {
                         </div>
 
                         <div class="flex flex-wrap gap-2">
+                            @if ($selectedLog->requires_follow_up)
+                                <flux:badge size="sm" color="amber" icon="flag">{{ __('Follow-up') }}</flux:badge>
+                            @endif
                             <flux:badge size="sm" color="{{ $this->communicationTypeBadgeColor($selectedLog) }}">
                                 {{ $selectedLog->communicationType?->name ?? __('Unknown') }}
                             </flux:badge>
@@ -597,13 +661,22 @@ new class extends Component {
                 </div>
 
                 <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    @can('viewAuditHistory', $selectedLog)
-                        <flux:button type="button" variant="ghost" icon="clock" wire:click="viewLogHistory('{{ $selectedLog->id }}')">
-                            {{ __('History') }}
+                    <div class="flex flex-wrap gap-2">
+                        <flux:button
+                            type="button"
+                            :variant="$this->followUpButtonVariant($selectedLog)"
+                            icon="flag"
+                            wire:click="toggleFollowUp('{{ $selectedLog->id }}')"
+                        >
+                            {{ $this->followUpButtonLabel($selectedLog) }}
                         </flux:button>
-                    @else
-                        <div></div>
-                    @endcan
+
+                        @can('viewAuditHistory', $selectedLog)
+                            <flux:button type="button" variant="ghost" icon="clock" wire:click="viewLogHistory('{{ $selectedLog->id }}')">
+                                {{ __('History') }}
+                            </flux:button>
+                        @endcan
+                    </div>
 
                     <div class="flex justify-end gap-2">
                         <flux:modal.close>

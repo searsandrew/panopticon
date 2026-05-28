@@ -28,6 +28,7 @@ class CreateNewUser implements CreatesNewUsers
             'name' => $input['name'],
             'email' => $input['email'],
             'password' => $input['password'],
+            'timezone' => config('panopticon.default_timezone', 'America/Chicago'),
         ]);
     }
 }

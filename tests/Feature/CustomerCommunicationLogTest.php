@@ -83,7 +83,9 @@ test('customers are opened by account number and show the communication log tabl
     configureBriarRoseForCustomerLogTests();
     fakeCustomerAccountLookup();
 
-    $user = permittedSalesRep($this);
+    $user = permittedSalesRep($this, [
+        'timezone' => 'UTC',
+    ]);
 
     $response = $this->actingAs($user)->get(route('customers.show', ['accountNumber' => 'A-0999']));
 
@@ -125,14 +127,41 @@ test('the reusable flyout starts a private draft when opened', function () {
         ->and($draft->user_id)->toBe($user->id)
         ->and($draft->customer_account_number)->toBe('A-0999')
         ->and($draft->netsuite_customer_id)->toBe(2462)
+        ->and($draft->requires_follow_up)->toBeFalse()
         ->and($draft->blocks)->toHaveCount(1);
+});
+
+test('the add log action always starts a fresh draft', function () {
+    configureBriarRoseForCustomerLogTests();
+
+    $user = permittedSalesRep($this);
+
+    $this->actingAs($user);
+
+    Livewire::test('customer-communication-log-flyout', [
+        'customer' => customerLogPayload(),
+        'accountNumber' => 'A-0999',
+    ])
+        ->call('open')
+        ->set('blocks.0.body', 'First draft stays in the table.');
+
+    Livewire::test('customer-communication-log-flyout', [
+        'customer' => customerLogPayload(),
+        'accountNumber' => 'A-0999',
+    ])
+        ->call('open')
+        ->assertSet('blocks.0.body', '');
+
+    expect(CustomerCommunicationLog::query()->where('status', CustomerCommunicationLog::STATUS_DRAFT)->count())->toBe(2);
 });
 
 test('summary is required before a communication log can be submitted', function () {
     configureBriarRoseForCustomerLogTests();
     fakeCustomerAccountLookup();
 
-    $user = permittedSalesRep($this);
+    $user = permittedSalesRep($this, [
+        'timezone' => 'UTC',
+    ]);
 
     $this->actingAs($user);
 
@@ -205,7 +234,9 @@ test('the customer page lists submitted logs with customer date status and trunc
     configureBriarRoseForCustomerLogTests();
     fakeCustomerAccountLookup();
 
-    $user = permittedSalesRep($this);
+    $user = permittedSalesRep($this, [
+        'timezone' => 'UTC',
+    ]);
     $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
     $summaryType = CommunicationBlockType::query()->where('slug', CommunicationBlockType::SUMMARY)->sole();
 
@@ -274,6 +305,126 @@ test('closing the flyout keeps the draft visible on the customer log table', fun
         ->assertSee('Started a draft before the call was ready.')
         ->assertSee('Draft')
         ->assertDontSee('No communication logs yet.');
+});
+
+test('click away closing the flyout keeps the draft visible on the customer log table', function () {
+    configureBriarRoseForCustomerLogTests();
+    fakeCustomerAccountLookup();
+
+    $user = permittedSalesRep($this);
+
+    $this->actingAs($user);
+
+    $page = Livewire::test('pages::customers.show', ['accountNumber' => 'A-0999'])
+        ->assertSee('No communication logs yet.');
+
+    Livewire::test('customer-communication-log-flyout', [
+        'customer' => customerLogPayload(),
+        'accountNumber' => 'A-0999',
+    ])
+        ->call('open')
+        ->set('blocks.0.body', 'Click-away should still save this draft.')
+        ->set('showLogFlyout', false)
+        ->assertDispatched('communication-log-saved');
+
+    $page
+        ->dispatch('communication-log-saved')
+        ->assertSee('Click-away should still save this draft.')
+        ->assertSee('Draft');
+});
+
+test('logs can be flagged for follow up from the flyout and customer viewer', function () {
+    configureBriarRoseForCustomerLogTests();
+    fakeCustomerAccountLookup();
+
+    $user = permittedSalesRep($this);
+
+    $this->actingAs($user);
+
+    Livewire::test('customer-communication-log-flyout', [
+        'customer' => customerLogPayload(),
+        'accountNumber' => 'A-0999',
+    ])
+        ->call('open')
+        ->call('toggleFollowUp')
+        ->assertSet('requiresFollowUp', true)
+        ->assertSee('Follow-up flagged')
+        ->set('blocks.0.body', 'This needs a follow-up call.')
+        ->call('submit')
+        ->assertHasNoErrors();
+
+    $log = CustomerCommunicationLog::query()
+        ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
+        ->sole();
+
+    expect($log->requires_follow_up)->toBeTrue();
+
+    Livewire::test('pages::customers.show', ['accountNumber' => 'A-0999'])
+        ->assertSee('Follow-up')
+        ->assertSee('bg-amber-50/70', false)
+        ->call('viewLog', $log->id)
+        ->assertSet('showLogDetails', true)
+        ->assertSee('Follow-up flagged')
+        ->call('toggleFollowUp', $log->id)
+        ->assertDispatched('communication-log-saved');
+
+    expect($log->refresh()->requires_follow_up)->toBeFalse();
+});
+
+test('the reusable log list opens submitted logs and drafts explicitly', function () {
+    configureBriarRoseForCustomerLogTests();
+
+    $user = permittedSalesRep($this);
+    $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
+    $summaryType = CommunicationBlockType::query()->where('slug', CommunicationBlockType::SUMMARY)->sole();
+
+    $submitted = CustomerCommunicationLog::factory()
+        ->submitted()
+        ->for($user)
+        ->for($type, 'communicationType')
+        ->create([
+            'netsuite_customer_id' => 2462,
+            'customer_account_number' => 'A-0999',
+            'requires_follow_up' => true,
+        ]);
+
+    $submitted->blocks()->create([
+        'communication_block_type_id' => $summaryType->id,
+        'position' => 0,
+        'body' => 'Submitted summary for the list modal.',
+    ]);
+
+    $draft = CustomerCommunicationLog::factory()
+        ->for($user)
+        ->for($type, 'communicationType')
+        ->create([
+            'netsuite_customer_id' => 2462,
+            'customer_account_number' => 'A-0999',
+            'status' => CustomerCommunicationLog::STATUS_DRAFT,
+        ]);
+
+    $draft->blocks()->create([
+        'communication_block_type_id' => $summaryType->id,
+        'position' => 0,
+        'body' => 'Draft summary for the list modal.',
+    ]);
+
+    $this->actingAs($user);
+
+    Livewire::test('customer-communication-log-list', [
+        'customer' => customerLogPayload(),
+        'accountNumber' => 'A-0999',
+    ])
+        ->call('openList')
+        ->assertSet('showLogList', true)
+        ->assertSee('Submitted summary for the list modal.')
+        ->assertSee('Draft summary for the list modal.')
+        ->assertSee('Follow-up')
+        ->call('viewLog', $submitted->id)
+        ->assertSet('showLogDetails', true)
+        ->call('viewLog', $draft->id)
+        ->assertDispatched('open-communication-log-editor')
+        ->assertSet('showLogList', false);
 });
 
 test('clicking a draft row opens the editable flyout instead of the read only details', function () {

@@ -56,12 +56,18 @@ new #[Title('Dashboard')] class extends Component {
     #[Computed]
     public function paginatedActiveCustomers(): LengthAwarePaginator
     {
-        $customers = collect($this->activeCustomers)
+        $sortedCustomers = collect($this->activeCustomers)
             ->sortBy(
                 fn (array $customer): string => $this->activeCustomerSortValue($customer, $this->activeCustomerSortColumn),
                 SORT_NATURAL | SORT_FLAG_CASE,
                 $this->activeCustomerSortDirection === 'desc',
             )
+            ->values();
+        $partitionedCustomers = $sortedCustomers->partition(
+            fn (array $customer): bool => $this->activeCustomerRequiresFollowUp($customer),
+        );
+        $customers = $partitionedCustomers[0]
+            ->concat($partitionedCustomers[1])
             ->values();
 
         $page = $this->getPage(self::ACTIVE_CUSTOMERS_PAGE);
@@ -147,7 +153,7 @@ new #[Title('Dashboard')] class extends Component {
         }
 
         $dueAt = $this->activeCustomerContactDueAt($customer);
-        $now = now();
+        $now = now($this->userTimezone());
 
         if (
             $dueAt->greaterThanOrEqualTo($now->copy()->subMinute())
@@ -174,7 +180,7 @@ new #[Title('Dashboard')] class extends Component {
     public function activeCustomerContactDueBadgeColor(array $customer): string
     {
         $dueAt = $this->activeCustomerContactDueAt($customer);
-        $now = now();
+        $now = now($this->userTimezone());
 
         if ($dueAt->lessThan($now->copy()->subMinute())) {
             return 'red';
@@ -185,6 +191,38 @@ new #[Title('Dashboard')] class extends Component {
         }
 
         return 'green';
+    }
+
+    /**
+     * @param  array<string, mixed>  $customer
+     */
+    public function activeCustomerRequiresFollowUp(array $customer): bool
+    {
+        return (bool) data_get($customer, 'requires_follow_up', false);
+    }
+
+    /**
+     * @param  array<string, mixed>  $customer
+     */
+    public function activeCustomerFollowUpLabel(array $customer): string
+    {
+        $count = (int) data_get($customer, 'follow_up_count', 0);
+
+        return trans_choice(':count follow-up|:count follow-ups', $count, ['count' => $count]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $customer
+     */
+    public function activeCustomerRowClass(array $customer): string
+    {
+        $classes = 'group cursor-pointer hover:bg-zinc-50 dark:hover:bg-white/5';
+
+        if ($this->activeCustomerRequiresFollowUp($customer)) {
+            $classes .= ' bg-amber-50/70 hover:bg-amber-100/70 dark:bg-amber-500/10 dark:hover:bg-amber-500/15';
+        }
+
+        return $classes;
     }
 
     #[Computed]
@@ -222,19 +260,19 @@ new #[Title('Dashboard')] class extends Component {
         $lastContactAt = $this->activeCustomerLastContactAt($customer);
 
         if ($lastContactAt === null) {
-            return now();
+            return now($this->userTimezone());
         }
 
         $cadenceIso8601 = data_get($customer, 'cadence_iso8601');
 
         if (! is_string($cadenceIso8601) || trim($cadenceIso8601) === '') {
-            return now();
+            return now($this->userTimezone());
         }
 
         try {
             return $lastContactAt->copy()->add(new \DateInterval($cadenceIso8601));
         } catch (\Throwable) {
-            return now();
+            return now($this->userTimezone());
         }
     }
 
@@ -247,20 +285,20 @@ new #[Title('Dashboard')] class extends Component {
             $value = data_get($customer, $key);
 
             if ($value instanceof Carbon) {
-                return $value->copy();
+                return $value->copy()->timezone($this->userTimezone());
             }
 
             if ($value instanceof \DateTimeInterface) {
-                return Carbon::instance($value);
+                return Carbon::instance($value)->timezone($this->userTimezone());
             }
 
             if (is_int($value)) {
-                return Carbon::createFromTimestamp($value);
+                return Carbon::createFromTimestamp($value)->timezone($this->userTimezone());
             }
 
             if (is_string($value) && trim($value) !== '') {
                 try {
-                    return Carbon::parse($value);
+                    return Carbon::parse($value)->timezone($this->userTimezone());
                 } catch (\Throwable) {
                     continue;
                 }
@@ -273,6 +311,15 @@ new #[Title('Dashboard')] class extends Component {
     private function contactDueWarningDays(): int
     {
         return max(0, (int) config('panopticon.contact_due_warning_days', 2));
+    }
+
+    private function userTimezone(): string
+    {
+        $timezone = Auth::user()?->timezone;
+
+        return is_string($timezone) && in_array($timezone, timezone_identifiers_list(), true)
+            ? $timezone
+            : (string) config('app.timezone', 'UTC');
     }
 
     /**
@@ -292,20 +339,46 @@ new #[Title('Dashboard')] class extends Component {
             return $customers;
         }
 
+        $salesRepId = $this->salesRepId();
+
         $lastLogs = CustomerCommunicationLog::query()
             ->whereIn('netsuite_customer_id', $customerIds)
             ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
+            ->when($salesRepId !== null, fn ($query) => $query->where('netsuite_sales_rep_id', $salesRepId))
             ->selectRaw('netsuite_customer_id, max(contact_at) as last_log_at')
             ->groupBy('netsuite_customer_id')
             ->pluck('last_log_at', 'netsuite_customer_id');
 
+        $followUpCounts = CustomerCommunicationLog::query()
+            ->whereIn('netsuite_customer_id', $customerIds)
+            ->where('requires_follow_up', true)
+            ->where(function ($query) use ($salesRepId): void {
+                $query->where(function ($query) use ($salesRepId): void {
+                    $query
+                        ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
+                        ->when($salesRepId !== null, fn ($query) => $query->where('netsuite_sales_rep_id', $salesRepId));
+                })->orWhere(function ($query): void {
+                    $query
+                        ->where('status', CustomerCommunicationLog::STATUS_DRAFT)
+                        ->where('user_id', Auth::id());
+                });
+            })
+            ->selectRaw('netsuite_customer_id, count(*) as follow_up_count')
+            ->groupBy('netsuite_customer_id')
+            ->pluck('follow_up_count', 'netsuite_customer_id');
+
         return collect($customers)
-            ->map(function (array $customer) use ($lastLogs): array {
-                $lastLogAt = $lastLogs->get((int) data_get($customer, 'customer_id'));
+            ->map(function (array $customer) use ($followUpCounts, $lastLogs): array {
+                $customerId = (int) data_get($customer, 'customer_id');
+                $lastLogAt = $lastLogs->get($customerId);
+                $followUpCount = (int) $followUpCounts->get($customerId, 0);
 
                 if ($lastLogAt !== null) {
                     $customer['last_log_at'] = $lastLogAt;
                 }
+
+                $customer['follow_up_count'] = $followUpCount;
+                $customer['requires_follow_up'] = $followUpCount > 0;
 
                 return $customer;
             })
@@ -355,15 +428,23 @@ new #[Title('Dashboard')] class extends Component {
                                 </div>
                                 <div>
                                     <div class="text-xs font-medium uppercase text-neutral-500 dark:text-neutral-400">{{ __('Log') }}</div>
-                                    <div class="mt-1">
-                                        <livewire:customer-communication-log-flyout
+                                    <div class="mt-1 flex items-center gap-1">
+                                        <livewire:customer-communication-log-list
                                             :customer="$customer"
                                             :account-number="(string) (data_get($customer, 'account_number') ?: data_get($customer, 'customer_id'))"
                                             trigger-label="Log"
                                             trigger-icon="chat-bubble-left-ellipsis"
                                             trigger-size="sm"
                                             trigger-variant=""
-                                            :split-trigger="true"
+                                            :key="'pipeline-log-list-'.data_get($customer, 'customer_id')"
+                                        />
+                                        <livewire:customer-communication-log-flyout
+                                            :customer="$customer"
+                                            :account-number="(string) (data_get($customer, 'account_number') ?: data_get($customer, 'customer_id'))"
+                                            trigger-label=""
+                                            trigger-icon="plus"
+                                            trigger-size="sm"
+                                            trigger-variant=""
                                             :key="'pipeline-log-flyout-'.data_get($customer, 'customer_id')"
                                         />
                                     </div>
@@ -440,13 +521,19 @@ new #[Title('Dashboard')] class extends Component {
                             @php($activeCustomerAccountNumber = data_get($customer, 'account_number') ?: data_get($customer, 'customer_id'))
                             @php($activeCustomerHref = route('customers.show', ['accountNumber' => $activeCustomerAccountNumber]))
 
-                            <flux:table.row :key="'active-customer-'.data_get($customer, 'customer_id')" class="group cursor-pointer hover:bg-zinc-50 dark:hover:bg-white/5">
+                            <flux:table.row :key="'active-customer-'.data_get($customer, 'customer_id')" class="{{ $this->activeCustomerRowClass($customer) }}">
                                 <flux:table.cell variant="strong">
                                     <a href="{{ $activeCustomerHref }}" wire:navigate class="-m-3 block px-3 py-3">
-                                        <span class="flex items-center gap-2">
+                                        <span class="flex flex-wrap items-center gap-2">
                                             <flux:badge size="sm" inset="top bottom" color="{{ $this->activeCustomerCategoryBadgeColor($customer) }}">
                                                 {{ $this->activeCustomerCategoryLabel($customer) }}
                                             </flux:badge>
+
+                                            @if ($this->activeCustomerRequiresFollowUp($customer))
+                                                <flux:badge size="sm" inset="top bottom" color="amber" icon="flag">
+                                                    {{ $this->activeCustomerFollowUpLabel($customer) }}
+                                                </flux:badge>
+                                            @endif
 
                                             <span>{{ data_get($customer, 'companyname') ?: data_get($customer, 'entityid') }}</span>
                                         </span>

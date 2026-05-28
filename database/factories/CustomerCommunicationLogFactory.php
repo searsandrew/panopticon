@@ -29,6 +29,7 @@ class CustomerCommunicationLogFactory extends Factory
             'contact_person_name' => fake()->name(),
             'contact_at' => now(),
             'status' => CustomerCommunicationLog::STATUS_DRAFT,
+            'requires_follow_up' => false,
             'last_autosaved_at' => now(),
         ];
     }

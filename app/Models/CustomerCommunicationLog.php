@@ -24,6 +24,7 @@ use OwenIt\Auditing\Contracts\Auditable;
     'contact_person_name',
     'contact_at',
     'status',
+    'requires_follow_up',
     'submitted_at',
     'last_autosaved_at',
     'communication_block_type_id',
@@ -93,6 +94,7 @@ class CustomerCommunicationLog extends Model implements Auditable
             'last_autosaved_at' => 'datetime',
             'netsuite_customer_id' => 'integer',
             'netsuite_sales_rep_id' => 'integer',
+            'requires_follow_up' => 'boolean',
             'submitted_at' => 'datetime',
         ];
     }

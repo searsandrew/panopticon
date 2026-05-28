@@ -41,6 +41,8 @@ new class extends Component {
 
     public bool $editingSubmittedLog = false;
 
+    public bool $requiresFollowUp = false;
+
     public string $contactAt = '';
 
     public ?string $communicationTypeId = null;
@@ -81,7 +83,7 @@ new class extends Component {
 
         abort_unless($this->userCanAccessCustomer(), 403);
 
-        $this->loadOrCreateDraft();
+        $this->fillFromLog($this->createDraft()->load(['blocks.blockType']));
         $this->showLogFlyout = true;
     }
 
@@ -168,6 +170,21 @@ new class extends Component {
         $this->autosaveLog();
     }
 
+    public function toggleFollowUp(): void
+    {
+        $log = $this->currentLog();
+
+        Gate::authorize('update', $log);
+
+        $this->requiresFollowUp = ! $this->requiresFollowUp;
+
+        $log->forceFill([
+            'requires_follow_up' => $this->requiresFollowUp,
+        ])->save();
+
+        $this->dispatch('communication-log-saved');
+    }
+
     public function submit(): void
     {
         $log = $this->currentLog();
@@ -184,8 +201,9 @@ new class extends Component {
             'communication_type_id' => $this->communicationTypeId,
             'customer_contact_id' => $contact?->id,
             'contact_person_name' => $this->normalizedContactPersonName(),
-            'contact_at' => Carbon::parse($this->contactAt),
+            'contact_at' => $this->parsedContactAt(),
             'status' => CustomerCommunicationLog::STATUS_SUBMITTED,
+            'requires_follow_up' => $this->requiresFollowUp,
             'submitted_at' => $log->submitted_at ?? now(),
             'last_autosaved_at' => now(),
         ])->save();
@@ -276,6 +294,16 @@ new class extends Component {
         return $this->editingSubmittedLog ? __('Save changes') : __('Submit log');
     }
 
+    public function followUpButtonLabel(): string
+    {
+        return $this->requiresFollowUp ? __('Follow-up flagged') : __('Flag follow-up');
+    }
+
+    public function followUpButtonVariant(): string
+    {
+        return $this->requiresFollowUp ? 'filled' : 'ghost';
+    }
+
     private function userCanAccessCustomer(): bool
     {
         $netsuiteUserId = Auth::user()?->netsuite_user_id;
@@ -289,25 +317,6 @@ new class extends Component {
                 && (int) data_get($this->customer, $key) === (int) $netsuiteUserId);
     }
 
-    private function loadOrCreateDraft(): void
-    {
-        $log = CustomerCommunicationLog::query()
-            ->with(['blocks.blockType'])
-            ->where('user_id', Auth::id())
-            ->where('customer_account_number', $this->accountNumber)
-            ->where('status', CustomerCommunicationLog::STATUS_DRAFT)
-            ->latest('updated_at')
-            ->first();
-
-        if (! $log) {
-            $log = $this->createDraft();
-        }
-
-        Gate::authorize('update', $log);
-
-        $this->fillFromLog($log->load(['blocks.blockType']));
-    }
-
     private function createDraft(): CustomerCommunicationLog
     {
         $log = CustomerCommunicationLog::query()->create([
@@ -319,6 +328,7 @@ new class extends Component {
             'communication_type_id' => $this->defaultCommunicationType()->id,
             'contact_at' => now(),
             'status' => CustomerCommunicationLog::STATUS_DRAFT,
+            'requires_follow_up' => false,
             'last_autosaved_at' => now(),
         ]);
 
@@ -335,10 +345,11 @@ new class extends Component {
     {
         $this->logId = $log->id;
         $this->editingSubmittedLog = ! $log->isDraft();
-        $this->contactAt = ($log->contact_at ?? now())->format('Y-m-d\TH:i');
+        $this->contactAt = ($log->contact_at ?? now())->copy()->timezone($this->userTimezone())->format('Y-m-d\TH:i');
         $this->communicationTypeId = $log->communication_type_id;
         $this->contactPersonName = (string) $log->contact_person_name;
-        $this->lastAutosavedAt = $log->last_autosaved_at?->format('g:i A');
+        $this->requiresFollowUp = (bool) $log->requires_follow_up;
+        $this->lastAutosavedAt = $log->last_autosaved_at?->copy()->timezone($this->userTimezone())->format('g:i A');
         $this->blocks = $log->blocks
             ->sortBy('position')
             ->values()
@@ -365,6 +376,7 @@ new class extends Component {
         $attributes = [
             'communication_type_id' => $this->communicationTypeId ?: $this->defaultCommunicationType()->id,
             'contact_person_name' => $this->normalizedContactPersonName(),
+            'requires_follow_up' => $this->requiresFollowUp,
             'last_autosaved_at' => now(),
         ];
 
@@ -375,7 +387,7 @@ new class extends Component {
         $log->fill($attributes)->save();
         $this->syncBlocks($log);
 
-        $this->lastAutosavedAt = now()->format('g:i A');
+        $this->lastAutosavedAt = now($this->userTimezone())->format('g:i A');
     }
 
     private function currentLog(): CustomerCommunicationLog
@@ -548,10 +560,19 @@ new class extends Component {
     private function parsedContactAt(): ?Carbon
     {
         try {
-            return Carbon::parse($this->contactAt);
+            return Carbon::parse($this->contactAt, $this->userTimezone())->setTimezone(config('app.timezone'));
         } catch (Throwable) {
             return null;
         }
+    }
+
+    private function userTimezone(): string
+    {
+        $timezone = Auth::user()?->timezone;
+
+        return is_string($timezone) && in_array($timezone, timezone_identifiers_list(), true)
+            ? $timezone
+            : (string) config('app.timezone', 'UTC');
     }
 
     private function closeLogFlyout(): void
@@ -575,6 +596,7 @@ new class extends Component {
         $this->contactAt = '';
         $this->communicationTypeId = null;
         $this->contactPersonName = '';
+        $this->requiresFollowUp = false;
         $this->blocks = [];
         $this->lastAutosavedAt = null;
     }
@@ -610,21 +632,21 @@ new class extends Component {
                 :variant="$triggerVariant ?: null"
                 :icon="$triggerIcon"
                 wire:click="open"
+                :aria-label="$triggerLabel === '' ? __('Add log entry') : null"
             >
-                {{ __($triggerLabel) }}
+                @if ($triggerLabel !== '')
+                    {{ __($triggerLabel) }}
+                @endif
             </flux:button>
         @endif
     @endcan
 
     @if ($showLogFlyout || $logId)
-        <flux:modal wire:model.self="showLogFlyout" flyout variant="floating" class="md:w-2xl">
+        <flux:modal wire:model.self="showLogFlyout" @close="close" @cancel="close" flyout variant="floating" class="md:w-2xl">
             <form wire:submit="submit" class="space-y-6">
                 <div class="space-y-2">
                     <flux:heading size="lg">{{ $this->flyoutHeading() }}</flux:heading>
                     <flux:text>{{ $this->customerName() }}</flux:text>
-                    @if ($lastAutosavedAt)
-                        <flux:text>{{ $this->savedMessage() }}</flux:text>
-                    @endif
                 </div>
 
                 <div class="grid gap-4 md:grid-cols-2">
@@ -697,11 +719,22 @@ new class extends Component {
                     @endforeach
                 </div>
 
-                <div class="flex justify-end gap-2">
-                    <flux:button type="button" variant="filled" wire:click="close">{{ __('Cancel') }}</flux:button>
-                    <flux:button type="submit" variant="primary" icon="check">
-                        {{ $this->submitButtonLabel() }}
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <flux:button
+                        type="button"
+                        :variant="$this->followUpButtonVariant()"
+                        icon="flag"
+                        wire:click="toggleFollowUp"
+                    >
+                        {{ $this->followUpButtonLabel() }}
                     </flux:button>
+
+                    <div class="flex justify-end gap-2">
+                        <flux:button type="button" variant="filled" wire:click="close">{{ __('Cancel') }}</flux:button>
+                        <flux:button type="submit" variant="primary" icon="check">
+                            {{ $this->submitButtonLabel() }}
+                        </flux:button>
+                    </div>
                 </div>
             </form>
         </flux:modal>

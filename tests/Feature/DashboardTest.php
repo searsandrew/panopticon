@@ -94,7 +94,9 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
             ]),
     ]);
 
-    $user = User::factory()->create();
+    $user = User::factory()->create([
+        'timezone' => 'UTC',
+    ]);
     $this->seed(CommunicationLoggingSeeder::class);
 
     $this->actingAs($user);
@@ -204,7 +206,9 @@ test('active customer table paginates and sorts without refetching NetSuite', fu
             ]),
     ]);
 
-    $user = User::factory()->create();
+    $user = User::factory()->create([
+        'timezone' => 'UTC',
+    ]);
     $this->actingAs($user);
 
     Livewire::test('pages::dashboard')
@@ -247,7 +251,9 @@ test('active customer category badges map known categories and fallback categori
             ]),
     ]);
 
-    $user = User::factory()->create();
+    $user = User::factory()->create([
+        'timezone' => 'UTC',
+    ]);
     $this->actingAs($user);
 
     $dashboard = Livewire::test('pages::dashboard')->instance();
@@ -298,7 +304,9 @@ test('active customer contact due uses last log and cadence and defaults untouch
 
     $this->travelTo(Carbon::parse('2026-05-28 12:00:00'));
 
-    $user = User::factory()->create();
+    $user = User::factory()->create([
+        'timezone' => 'UTC',
+    ]);
     $this->actingAs($user);
 
     $dashboard = Livewire::test('pages::dashboard')->instance();
@@ -365,7 +373,9 @@ test('active customer contact due warning window is configurable', function () {
 
     $this->travelTo(Carbon::parse('2026-05-28 12:00:00'));
 
-    $user = User::factory()->create();
+    $user = User::factory()->create([
+        'timezone' => 'UTC',
+    ]);
     $this->actingAs($user);
 
     $dashboard = Livewire::test('pages::dashboard')->instance();
@@ -390,7 +400,9 @@ test('active customer contact due can use the latest submitted local communicati
 
     $this->travelTo(Carbon::parse('2026-05-28 12:00:00'));
 
-    $user = User::factory()->create();
+    $user = User::factory()->create([
+        'timezone' => 'UTC',
+    ]);
     $type = CommunicationType::factory()->create();
 
     CustomerCommunicationLog::factory()
@@ -433,6 +445,74 @@ test('active customer contact due can use the latest submitted local communicati
 
     expect($dashboard->activeCustomerRows[0]['last_log_at'])->not->toBeNull()
         ->and($dashboard->activeCustomerContactDueLabel($dashboard->activeCustomerRows[0]))->toBe('Due in 3 weeks');
+});
+
+test('active customers with follow up logs are indicated and floated to the top', function () {
+    config()->set('briar-rose.account', '1234567');
+    config()->set('briar-rose.consumer_key', 'consumer-key');
+    config()->set('briar-rose.consumer_secret', 'consumer-secret');
+    config()->set('briar-rose.token_id', 'token-id');
+    config()->set('briar-rose.token_secret', 'token-secret');
+    config()->set('briar-rose.rest_base_url', 'https://netsuite.test');
+    config()->set('briar-rose.rest.retries.enabled', false);
+
+    app()->forgetInstance(BriarRoseManager::class);
+
+    $user = User::factory()->create();
+    $type = CommunicationType::factory()->create();
+
+    CustomerCommunicationLog::factory()
+        ->submitted()
+        ->for($user)
+        ->for($type, 'communicationType')
+        ->create([
+            'netsuite_customer_id' => 2463,
+            'customer_account_number' => 'B-1001',
+            'customer_name' => 'Bright Smiles',
+            'requires_follow_up' => true,
+        ]);
+
+    Http::preventStrayRequests();
+    Http::fake([
+        '*' => Http::sequence()
+            ->push([
+                'items' => [],
+                'hasMore' => false,
+            ])
+            ->push([
+                'items' => [
+                    [
+                        'id' => '2462',
+                        'customer_id' => '2462',
+                        'account_number' => 'A-0999',
+                        'entityid' => 'CUST-2462',
+                        'companyname' => 'Acme Dental',
+                        'sales_rep_id' => '2214',
+                        'cadence_name' => 'Monthly',
+                        'cadence_scriptid' => '_P1M',
+                    ],
+                    [
+                        'id' => '2463',
+                        'customer_id' => '2463',
+                        'account_number' => 'B-1001',
+                        'entityid' => 'CUST-2463',
+                        'companyname' => 'Bright Smiles',
+                        'sales_rep_id' => '2214',
+                        'cadence_name' => 'Monthly',
+                        'cadence_scriptid' => '_P1M',
+                    ],
+                ],
+                'hasMore' => false,
+            ]),
+    ]);
+
+    $this->actingAs($user);
+
+    $component = Livewire::test('pages::dashboard')
+        ->assertSee('1 follow-up')
+        ->assertSee('bg-amber-50/70', false);
+
+    expect(data_get($component->instance()->paginatedActiveCustomers->items()[0], 'companyname'))->toBe('Bright Smiles');
 });
 
 test('linked users without a NetSuite sales rep id see an unlinked dashboard state', function () {

@@ -7,6 +7,7 @@ use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Flux\Flux;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Session;
+use Illuminate\Validation\Rule;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
 use Livewire\Component;
@@ -16,6 +17,7 @@ new #[Title('Profile settings')] class extends Component {
 
     public string $name = '';
     public string $email = '';
+    public string $timezone = '';
 
     /**
      * Mount the component.
@@ -24,6 +26,7 @@ new #[Title('Profile settings')] class extends Component {
     {
         $this->name = Auth::user()->name;
         $this->email = Auth::user()->email;
+        $this->timezone = Auth::user()->timezone ?: (string) config('app.timezone', 'UTC');
     }
 
     /**
@@ -33,7 +36,10 @@ new #[Title('Profile settings')] class extends Component {
     {
         $user = Auth::user();
 
-        $validated = $this->validate($this->profileRules($user->id));
+        $validated = $this->validate([
+            ...$this->profileRules($user->id),
+            'timezone' => ['required', 'string', Rule::in($this->timezones)],
+        ]);
 
         $user->fill($validated);
 
@@ -66,6 +72,12 @@ new #[Title('Profile settings')] class extends Component {
     }
 
     #[Computed]
+    public function timezones(): array
+    {
+        return timezone_identifiers_list();
+    }
+
+    #[Computed]
     public function hasUnverifiedEmail(): bool
     {
         return Auth::user() instanceof MustVerifyEmail && ! Auth::user()->hasVerifiedEmail();
@@ -85,7 +97,7 @@ new #[Title('Profile settings')] class extends Component {
 
     <flux:heading class="sr-only">{{ __('Profile settings') }}</flux:heading>
 
-    <x-pages::settings.layout :heading="__('Profile')" :subheading="__('Update your name and email address')">
+    <x-pages::settings.layout :heading="__('Profile')" :subheading="__('Update your name, email address, and timezone')">
         <form wire:submit="updateProfileInformation" class="my-6 w-full space-y-6">
             <flux:input wire:model="name" :label="__('Name')" type="text" required autofocus autocomplete="name" />
 
@@ -112,6 +124,12 @@ new #[Title('Profile settings')] class extends Component {
                 @endif
                 {{-- @end-chisel-email-verification --}}
             </div>
+
+            <flux:select wire:model="timezone" :label="__('Timezone')" required>
+                @foreach ($this->timezones as $timezone)
+                    <flux:select.option value="{{ $timezone }}">{{ $timezone }}</flux:select.option>
+                @endforeach
+            </flux:select>
 
             <div class="flex items-center gap-4">
                 <div class="flex items-center justify-end">
