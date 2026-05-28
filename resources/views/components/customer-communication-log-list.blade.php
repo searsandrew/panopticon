@@ -21,7 +21,7 @@ new class extends Component {
 
     public string $triggerLabel = 'Log';
 
-    public string $triggerIcon = 'chat-bubble-left-ellipsis';
+    public ?string $triggerIcon = 'chat-bubble-left-ellipsis';
 
     public string $triggerSize = 'sm';
 
@@ -40,7 +40,7 @@ new class extends Component {
         array $customer,
         string $accountNumber,
         string $triggerLabel = 'Log',
-        string $triggerIcon = 'chat-bubble-left-ellipsis',
+        ?string $triggerIcon = 'chat-bubble-left-ellipsis',
         string $triggerSize = 'sm',
         string $triggerVariant = '',
     ): void {
@@ -96,6 +96,26 @@ new class extends Component {
         $this->showLogList = false;
 
         $this->dispatch('open-communication-log-editor', logId: $log->id);
+    }
+
+    public function deleteDraft(string $logId): void
+    {
+        $log = $this->findLogForCurrentCustomer($logId);
+
+        abort_unless($log->isDraft(), 403);
+
+        Gate::authorize('delete', $log);
+
+        $log->delete();
+
+        unset($this->communicationLogs);
+
+        if ($this->selectedLogId === $log->id) {
+            $this->selectedLogId = null;
+            $this->showLogDetails = false;
+        }
+
+        $this->dispatch('communication-log-saved');
     }
 
     public function updatedShowLogDetails(bool $value): void
@@ -290,7 +310,7 @@ new class extends Component {
             type="button"
             :size="$triggerSize"
             :variant="$triggerVariant ?: null"
-            :icon="$triggerIcon"
+            :icon="$triggerIcon ?: null"
             wire:click="openList"
         >
             {{ __($triggerLabel) }}
@@ -336,6 +356,20 @@ new class extends Component {
                                         <flux:badge size="sm" inset="top bottom" color="{{ $this->statusBadgeColor($log) }}">
                                             {{ $this->statusLabel($log) }}
                                         </flux:badge>
+                                        @if ($log->isDraft())
+                                            @can('delete', $log)
+                                                <flux:button
+                                                    size="xs"
+                                                    type="button"
+                                                    variant="danger"
+                                                    icon="trash"
+                                                    wire:click.stop="deleteDraft('{{ $log->id }}')"
+                                                    wire:confirm="Are you sure you want to delete this log?"
+                                                >
+                                                    {{ __('Delete') }}
+                                                </flux:button>
+                                            @endcan
+                                        @endif
                                     </span>
                                 </flux:table.cell>
                                 <flux:table.cell class="max-w-md">

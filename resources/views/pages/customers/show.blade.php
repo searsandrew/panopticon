@@ -159,6 +159,27 @@ new class extends Component {
         $this->dispatch('communication-log-saved');
     }
 
+    public function deleteDraft(string $logId): void
+    {
+        $log = $this->findLogForCurrentCustomer($logId);
+
+        abort_unless($log->isDraft(), 403);
+
+        Gate::authorize('delete', $log);
+
+        $log->delete();
+
+        unset($this->communicationLogs);
+
+        if ($this->selectedLogId === $log->id) {
+            $this->selectedLogId = null;
+            $this->showLogDetails = false;
+            $this->showLogHistory = false;
+        }
+
+        $this->dispatch('communication-log-saved');
+    }
+
     public function updatedShowLogDetails(bool $value): void
     {
         if (! $value && ! $this->showLogHistory) {
@@ -571,6 +592,18 @@ new class extends Component {
                                         <flux:badge size="sm" inset="top bottom" color="{{ $this->statusBadgeColor($log) }}">
                                             {{ $this->statusLabel($log) }}
                                         </flux:badge>
+                                        @if ($log->isDraft())
+                                            @can('delete', $log)
+                                                <flux:button
+                                                    size="xs"
+                                                    type="button"
+                                                    variant="subtle"
+                                                    icon="trash"
+                                                    wire:click.stop="deleteDraft('{{ $log->id }}')"
+                                                    wire:confirm="Are you sure you want to delete this log?"
+                                                />
+                                            @endcan
+                                        @endif
                                     </span>
                                 </flux:table.cell>
                                 <flux:table.cell class="max-w-md">

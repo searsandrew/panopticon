@@ -218,6 +218,24 @@ new class extends Component {
         $this->dispatch('communication-log-saved');
     }
 
+    public function deleteDraft(): void
+    {
+        $log = $this->currentLog();
+
+        abort_unless($log->isDraft(), 403);
+
+        Gate::authorize('delete', $log);
+
+        $log->delete();
+
+        $this->resetLogState();
+        $this->showLogFlyout = false;
+
+        Flux::toast(variant: 'success', text: __('Draft deleted.'));
+
+        $this->dispatch('communication-log-saved');
+    }
+
     /**
      * @return Collection<int, CommunicationType>
      */
@@ -302,6 +320,19 @@ new class extends Component {
     public function followUpButtonVariant(): string
     {
         return $this->requiresFollowUp ? 'filled' : 'ghost';
+    }
+
+    public function canDeleteDraft(): bool
+    {
+        if ($this->logId === null || $this->editingSubmittedLog) {
+            return false;
+        }
+
+        $log = CustomerCommunicationLog::query()->find($this->logId);
+
+        return $log instanceof CustomerCommunicationLog
+            && $log->isDraft()
+            && Gate::allows('delete', $log);
     }
 
     private function userCanAccessCustomer(): bool
@@ -720,14 +751,22 @@ new class extends Component {
                 </div>
 
                 <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <flux:button
-                        type="button"
-                        :variant="$this->followUpButtonVariant()"
-                        icon="flag"
-                        wire:click="toggleFollowUp"
-                    >
-                        {{ $this->followUpButtonLabel() }}
-                    </flux:button>
+                    <div class="flex flex-wrap gap-2">
+                        <flux:button
+                            type="button"
+                            :variant="$this->followUpButtonVariant()"
+                            icon="flag"
+                            wire:click="toggleFollowUp"
+                        >
+                            {{ $this->followUpButtonLabel() }}
+                        </flux:button>
+
+                        @if ($this->canDeleteDraft())
+                            <flux:button type="button" variant="subtle" icon="trash" wire:click="deleteDraft" wire:confirm="Are you sure you want to delete this log?">
+                                {{ __('Delete draft') }}
+                            </flux:button>
+                        @endif
+                    </div>
 
                     <div class="flex justify-end gap-2">
                         <flux:button type="button" variant="filled" wire:click="close">{{ __('Cancel') }}</flux:button>

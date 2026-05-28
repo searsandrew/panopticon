@@ -40,7 +40,10 @@ new #[Title('Dashboard')] class extends Component {
             return;
         }
 
-        $this->pipelineCustomerRows = $customers->pipelineForSalesRep($salesRepId);
+        $this->pipelineCustomerRows = $this->withCommunicationLogStats(
+            $customers->pipelineForSalesRep($salesRepId),
+            includeDraftFollowUps: false,
+        );
         $this->activeCustomerRows = $this->withLastCommunicationLogs($customers->activeForSalesRep($salesRepId));
     }
 
@@ -225,6 +228,40 @@ new #[Title('Dashboard')] class extends Component {
         return $classes;
     }
 
+    /**
+     * @param  array<string, mixed>  $customer
+     */
+    public function pipelineCustomerSubmittedLogCount(array $customer): int
+    {
+        return (int) data_get($customer, 'submitted_log_count', 0);
+    }
+
+    /**
+     * @param  array<string, mixed>  $customer
+     */
+    public function pipelineCustomerLogCountLabel(array $customer): string
+    {
+        $count = $this->pipelineCustomerSubmittedLogCount($customer);
+
+        return trans_choice(':count log|:count logs', $count, ['count' => $count]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $customer
+     */
+    public function pipelineCustomerRequiresFollowUp(array $customer): bool
+    {
+        return (bool) data_get($customer, 'requires_follow_up', false);
+    }
+
+    /**
+     * @param  array<string, mixed>  $customer
+     */
+    public function pipelineCustomerLogButtonIcon(array $customer): ?string
+    {
+        return $this->pipelineCustomerRequiresFollowUp($customer) ? 'flag' : null;
+    }
+
     #[Computed]
     public function isLinkedToNetSuite(): bool
     {
@@ -328,6 +365,19 @@ new #[Title('Dashboard')] class extends Component {
      */
     private function withLastCommunicationLogs(array $customers): array
     {
+        return $this->withCommunicationLogStats($customers, includeLastLog: true);
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $customers
+     * @return array<int, array<string, mixed>>
+     */
+    private function withCommunicationLogStats(
+        array $customers,
+        bool $includeLastLog = false,
+        bool $includeDraftFollowUps = true,
+    ): array
+    {
         $customerIds = collect($customers)
             ->pluck('customer_id')
             ->filter()
@@ -341,26 +391,40 @@ new #[Title('Dashboard')] class extends Component {
 
         $salesRepId = $this->salesRepId();
 
-        $lastLogs = CustomerCommunicationLog::query()
+        $lastLogs = collect();
+
+        if ($includeLastLog) {
+            $lastLogs = CustomerCommunicationLog::query()
+                ->whereIn('netsuite_customer_id', $customerIds)
+                ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
+                ->when($salesRepId !== null, fn ($query) => $query->where('netsuite_sales_rep_id', $salesRepId))
+                ->selectRaw('netsuite_customer_id, max(contact_at) as last_log_at')
+                ->groupBy('netsuite_customer_id')
+                ->pluck('last_log_at', 'netsuite_customer_id');
+        }
+
+        $submittedLogCounts = CustomerCommunicationLog::query()
             ->whereIn('netsuite_customer_id', $customerIds)
             ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
             ->when($salesRepId !== null, fn ($query) => $query->where('netsuite_sales_rep_id', $salesRepId))
-            ->selectRaw('netsuite_customer_id, max(contact_at) as last_log_at')
+            ->selectRaw('netsuite_customer_id, count(*) as submitted_log_count')
             ->groupBy('netsuite_customer_id')
-            ->pluck('last_log_at', 'netsuite_customer_id');
+            ->pluck('submitted_log_count', 'netsuite_customer_id');
 
         $followUpCounts = CustomerCommunicationLog::query()
             ->whereIn('netsuite_customer_id', $customerIds)
             ->where('requires_follow_up', true)
-            ->where(function ($query) use ($salesRepId): void {
+            ->where(function ($query) use ($includeDraftFollowUps, $salesRepId): void {
                 $query->where(function ($query) use ($salesRepId): void {
                     $query
                         ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
                         ->when($salesRepId !== null, fn ($query) => $query->where('netsuite_sales_rep_id', $salesRepId));
-                })->orWhere(function ($query): void {
-                    $query
-                        ->where('status', CustomerCommunicationLog::STATUS_DRAFT)
-                        ->where('user_id', Auth::id());
+                })->when($includeDraftFollowUps, function ($query): void {
+                    $query->orWhere(function ($query): void {
+                        $query
+                            ->where('status', CustomerCommunicationLog::STATUS_DRAFT)
+                            ->where('user_id', Auth::id());
+                    });
                 });
             })
             ->selectRaw('netsuite_customer_id, count(*) as follow_up_count')
@@ -368,15 +432,17 @@ new #[Title('Dashboard')] class extends Component {
             ->pluck('follow_up_count', 'netsuite_customer_id');
 
         return collect($customers)
-            ->map(function (array $customer) use ($followUpCounts, $lastLogs): array {
+            ->map(function (array $customer) use ($followUpCounts, $lastLogs, $submittedLogCounts): array {
                 $customerId = (int) data_get($customer, 'customer_id');
                 $lastLogAt = $lastLogs->get($customerId);
                 $followUpCount = (int) $followUpCounts->get($customerId, 0);
+                $submittedLogCount = (int) $submittedLogCounts->get($customerId, 0);
 
                 if ($lastLogAt !== null) {
                     $customer['last_log_at'] = $lastLogAt;
                 }
 
+                $customer['submitted_log_count'] = $submittedLogCount;
                 $customer['follow_up_count'] = $followUpCount;
                 $customer['requires_follow_up'] = $followUpCount > 0;
 
@@ -411,44 +477,34 @@ new #[Title('Dashboard')] class extends Component {
             @else
                 <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                     @foreach ($this->pipelineCustomers as $customer)
-                        <flux:card wire:key="pipeline-customer-{{ data_get($customer, 'customer_id') }}" class="space-y-4">
-                            <div>
+                        <flux:card wire:key="pipeline-customer-{{ data_get($customer, 'customer_id') }}" class="flex h-full flex-col justify-between gap-4">
+                            <div class="space-y-2">
                                 <flux:heading size="md">{{ data_get($customer, 'companyname') ?: data_get($customer, 'entityid') }}</flux:heading>
-                                <flux:text>{{ data_get($customer, 'email') ?: __('No email on file') }}</flux:text>
+                                <div class="space-y-1">
+                                    <flux:text>{{ data_get($customer, 'email') ?: __('No email on file') }}</flux:text>
+                                    <flux:text>{{ data_get($customer, 'phone') ?: __('No phone on file') }}</flux:text>
+                                </div>
                             </div>
 
-                            <div class="grid gap-3 text-sm sm:grid-cols-3">
-                                <div>
-                                    <div class="text-xs font-medium uppercase text-neutral-500 dark:text-neutral-400">{{ __('Phone') }}</div>
-                                    <div class="mt-1 text-neutral-900 dark:text-neutral-100">{{ data_get($customer, 'phone') ?: __('N/A') }}</div>
-                                </div>
-                                <div>
-                                    <div class="text-xs font-medium uppercase text-neutral-500 dark:text-neutral-400">{{ __('Cadence') }}</div>
-                                    <div class="mt-1 text-neutral-900 dark:text-neutral-100">{{ data_get($customer, 'cadence_name') ?: __('Not set') }}</div>
-                                </div>
-                                <div>
-                                    <div class="text-xs font-medium uppercase text-neutral-500 dark:text-neutral-400">{{ __('Log') }}</div>
-                                    <div class="mt-1 flex items-center gap-1">
-                                        <livewire:customer-communication-log-list
-                                            :customer="$customer"
-                                            :account-number="(string) (data_get($customer, 'account_number') ?: data_get($customer, 'customer_id'))"
-                                            trigger-label="Log"
-                                            trigger-icon="chat-bubble-left-ellipsis"
-                                            trigger-size="sm"
-                                            trigger-variant=""
-                                            :key="'pipeline-log-list-'.data_get($customer, 'customer_id')"
-                                        />
-                                        <livewire:customer-communication-log-flyout
-                                            :customer="$customer"
-                                            :account-number="(string) (data_get($customer, 'account_number') ?: data_get($customer, 'customer_id'))"
-                                            trigger-label=""
-                                            trigger-icon="plus"
-                                            trigger-size="sm"
-                                            trigger-variant=""
-                                            :key="'pipeline-log-flyout-'.data_get($customer, 'customer_id')"
-                                        />
-                                    </div>
-                                </div>
+                            <div class="flex flex-wrap items-center justify-between gap-3">
+                                <livewire:customer-communication-log-list
+                                    :customer="$customer"
+                                    :account-number="(string) (data_get($customer, 'account_number') ?: data_get($customer, 'customer_id'))"
+                                    :trigger-label="$this->pipelineCustomerLogCountLabel($customer)"
+                                    :trigger-icon="$this->pipelineCustomerLogButtonIcon($customer)"
+                                    trigger-size="sm"
+                                    :trigger-variant="$this->pipelineCustomerRequiresFollowUp($customer) ? 'filled' : ''"
+                                    :key="'pipeline-log-list-'.data_get($customer, 'customer_id')"
+                                />
+                                <livewire:customer-communication-log-flyout
+                                    :customer="$customer"
+                                    :account-number="(string) (data_get($customer, 'account_number') ?: data_get($customer, 'customer_id'))"
+                                    trigger-label="Add log"
+                                    trigger-icon="plus"
+                                    trigger-size="sm"
+                                    trigger-variant=""
+                                    :key="'pipeline-log-flyout-'.data_get($customer, 'customer_id')"
+                                />
                             </div>
                         </flux:card>
                     @endforeach

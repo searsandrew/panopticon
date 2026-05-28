@@ -333,6 +333,75 @@ test('click away closing the flyout keeps the draft visible on the customer log 
         ->assertSee('Draft');
 });
 
+test('drafts can be deleted from the editable flyout', function () {
+    configureBriarRoseForCustomerLogTests();
+
+    $user = permittedSalesRep($this);
+
+    $this->actingAs($user);
+
+    $component = Livewire::test('customer-communication-log-flyout', [
+        'customer' => customerLogPayload(),
+        'accountNumber' => 'A-0999',
+    ])
+        ->call('open')
+        ->assertSee('Delete draft')
+        ->set('blocks.0.body', 'This draft can go away.');
+
+    $draft = CustomerCommunicationLog::query()
+        ->where('status', CustomerCommunicationLog::STATUS_DRAFT)
+        ->sole();
+
+    $component
+        ->call('deleteDraft')
+        ->assertSet('showLogFlyout', false)
+        ->assertSet('logId', null)
+        ->assertDispatched('communication-log-saved');
+
+    $this->assertSoftDeleted('customer_communication_logs', [
+        'id' => $draft->id,
+    ]);
+
+    expect(CustomerCommunicationLog::query()->count())->toBe(0);
+});
+
+test('drafts can be deleted from the customer log table', function () {
+    configureBriarRoseForCustomerLogTests();
+    fakeCustomerAccountLookup();
+
+    $user = permittedSalesRep($this);
+    $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
+    $summaryType = CommunicationBlockType::query()->where('slug', CommunicationBlockType::SUMMARY)->sole();
+
+    $draft = CustomerCommunicationLog::factory()
+        ->for($user)
+        ->for($type, 'communicationType')
+        ->create([
+            'netsuite_customer_id' => 2462,
+            'customer_account_number' => 'A-0999',
+            'status' => CustomerCommunicationLog::STATUS_DRAFT,
+        ]);
+
+    $draft->blocks()->create([
+        'communication_block_type_id' => $summaryType->id,
+        'position' => 0,
+        'body' => 'Delete this draft from the table.',
+    ]);
+
+    $this->actingAs($user);
+
+    Livewire::test('pages::customers.show', ['accountNumber' => 'A-0999'])
+        ->assertSee('Delete this draft from the table.')
+        ->assertSee('Delete')
+        ->call('deleteDraft', $draft->id)
+        ->assertDispatched('communication-log-saved')
+        ->assertDontSee('Delete this draft from the table.');
+
+    $this->assertSoftDeleted('customer_communication_logs', [
+        'id' => $draft->id,
+    ]);
+});
+
 test('logs can be flagged for follow up from the flyout and customer viewer', function () {
     configureBriarRoseForCustomerLogTests();
     fakeCustomerAccountLookup();
@@ -425,6 +494,46 @@ test('the reusable log list opens submitted logs and drafts explicitly', functio
         ->call('viewLog', $draft->id)
         ->assertDispatched('open-communication-log-editor')
         ->assertSet('showLogList', false);
+});
+
+test('drafts can be deleted from the reusable log list', function () {
+    configureBriarRoseForCustomerLogTests();
+
+    $user = permittedSalesRep($this);
+    $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
+    $summaryType = CommunicationBlockType::query()->where('slug', CommunicationBlockType::SUMMARY)->sole();
+
+    $draft = CustomerCommunicationLog::factory()
+        ->for($user)
+        ->for($type, 'communicationType')
+        ->create([
+            'netsuite_customer_id' => 2462,
+            'customer_account_number' => 'A-0999',
+            'status' => CustomerCommunicationLog::STATUS_DRAFT,
+        ]);
+
+    $draft->blocks()->create([
+        'communication_block_type_id' => $summaryType->id,
+        'position' => 0,
+        'body' => 'Delete this draft from the list modal.',
+    ]);
+
+    $this->actingAs($user);
+
+    Livewire::test('customer-communication-log-list', [
+        'customer' => customerLogPayload(),
+        'accountNumber' => 'A-0999',
+    ])
+        ->call('openList')
+        ->assertSee('Delete this draft from the list modal.')
+        ->assertSee('Delete')
+        ->call('deleteDraft', $draft->id)
+        ->assertDispatched('communication-log-saved')
+        ->assertDontSee('Delete this draft from the list modal.');
+
+    $this->assertSoftDeleted('customer_communication_logs', [
+        'id' => $draft->id,
+    ]);
 });
 
 test('clicking a draft row opens the editable flyout instead of the read only details', function () {

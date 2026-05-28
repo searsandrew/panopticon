@@ -98,6 +98,18 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
         'timezone' => 'UTC',
     ]);
     $this->seed(CommunicationLoggingSeeder::class);
+    $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
+
+    CustomerCommunicationLog::factory()
+        ->submitted()
+        ->for($user)
+        ->for($type, 'communicationType')
+        ->create([
+            'netsuite_customer_id' => 3001,
+            'customer_account_number' => 'P-3001',
+            'customer_name' => 'Pipeline Parts',
+            'requires_follow_up' => true,
+        ]);
 
     $this->actingAs($user);
 
@@ -106,13 +118,17 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
         ->assertOk()
         ->assertSee('Pipeline')
         ->assertSee('Pipeline Parts')
+        ->assertSee('lead@pipeline.test')
+        ->assertSee('555-0199')
+        ->assertSee('1 log')
+        ->assertSee('Add log')
         ->assertSee('Acme Dental')
         ->assertSee('Bright Smiles')
         ->assertSee('APW1')
         ->assertSee('Dealer')
         ->assertSee('bg-blue-400/20', false)
         ->assertSee('bg-zinc-400/15', false)
-        ->assertSee('Monthly')
+        ->assertDontSee('>Monthly<', false)
         ->assertSee('Quarterly')
         ->assertSee('Annually')
         ->assertSee('Contact Due')
@@ -122,8 +138,6 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
         ->assertSee('data-flux-card', false)
         ->assertSee('data-flux-table', false)
         ->assertSee('sticky top-0 z-20', false)
-        ->assertSee('Log')
-        ->assertSee('Add log entry')
         ->assertSee('href="'.route('customers.show', ['accountNumber' => 'A-0999']).'"', false)
         ->assertSee('wire:navigate', false);
 
