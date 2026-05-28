@@ -14,6 +14,7 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Computed;
+use Livewire\Attributes\On;
 use Livewire\Component;
 
 new class extends Component {
@@ -36,7 +37,9 @@ new class extends Component {
 
     public bool $showLogFlyout = false;
 
-    public ?string $draftId = null;
+    public ?string $logId = null;
+
+    public bool $editingSubmittedLog = false;
 
     public string $contactAt = '';
 
@@ -82,6 +85,38 @@ new class extends Component {
         $this->showLogFlyout = true;
     }
 
+    #[On('open-communication-log-editor')]
+    public function openExisting(string $logId): void
+    {
+        $log = CustomerCommunicationLog::query()
+            ->with(['blocks.blockType'])
+            ->findOrFail($logId);
+
+        if (! $this->logBelongsToCurrentCustomer($log)) {
+            return;
+        }
+
+        Gate::authorize('update', $log);
+
+        $this->fillFromLog($log);
+        $this->showLogFlyout = true;
+    }
+
+    public function close(): void
+    {
+        $this->showLogFlyout = false;
+        $this->closeLogFlyout();
+    }
+
+    public function updatedShowLogFlyout(bool $value): void
+    {
+        if ($value) {
+            return;
+        }
+
+        $this->closeLogFlyout();
+    }
+
     public function updated(string $property): void
     {
         if (! $this->showLogFlyout) {
@@ -92,13 +127,13 @@ new class extends Component {
             in_array($property, ['contactAt', 'communicationTypeId', 'contactPersonName'], true)
             || str_starts_with($property, 'blocks.')
         ) {
-            $this->autosaveDraft();
+            $this->autosaveLog();
         }
     }
 
     public function addBlock(): void
     {
-        Gate::authorize('update', $this->draftLog());
+        Gate::authorize('update', $this->currentLog());
 
         $type = $this->defaultAdditionalBlockType();
 
@@ -108,12 +143,12 @@ new class extends Component {
             'body' => '',
         ];
 
-        $this->autosaveDraft();
+        $this->autosaveLog();
     }
 
     public function removeBlock(int $index): void
     {
-        Gate::authorize('update', $this->draftLog());
+        Gate::authorize('update', $this->currentLog());
 
         if (! array_key_exists($index, $this->blocks) || $this->isSummaryBlock($this->blocks[$index])) {
             return;
@@ -123,21 +158,23 @@ new class extends Component {
 
         $this->blocks = array_values($this->blocks);
 
-        $this->autosaveDraft();
+        $this->autosaveLog();
     }
 
     public function selectContactSuggestion(string $name): void
     {
         $this->contactPersonName = $name;
 
-        $this->autosaveDraft();
+        $this->autosaveLog();
     }
 
     public function submit(): void
     {
-        $log = $this->draftLog();
+        $log = $this->currentLog();
 
         Gate::authorize('update', $log);
+
+        $wasDraft = $log->isDraft();
 
         $this->ensureSummaryBlock();
         $this->validateLog();
@@ -149,16 +186,16 @@ new class extends Component {
             'contact_person_name' => $this->normalizedContactPersonName(),
             'contact_at' => Carbon::parse($this->contactAt),
             'status' => CustomerCommunicationLog::STATUS_SUBMITTED,
-            'submitted_at' => now(),
+            'submitted_at' => $log->submitted_at ?? now(),
             'last_autosaved_at' => now(),
         ])->save();
 
         $this->syncBlocks($log);
-        $this->resetDraftState();
+        $this->resetLogState();
 
         $this->showLogFlyout = false;
 
-        Flux::toast(variant: 'success', text: __('Communication logged.'));
+        Flux::toast(variant: 'success', text: $wasDraft ? __('Communication logged.') : __('Communication log updated.'));
 
         $this->dispatch('communication-log-saved');
     }
@@ -222,6 +259,23 @@ new class extends Component {
         return (string) ($this->blockTypes->firstWhere('id', $blockTypeId)?->name ?? __('Note'));
     }
 
+    public function flyoutHeading(): string
+    {
+        return $this->editingSubmittedLog ? __('Edit Communication') : __('Log Communication');
+    }
+
+    public function savedMessage(): string
+    {
+        return $this->editingSubmittedLog
+            ? __('Saved :time', ['time' => $this->lastAutosavedAt])
+            : __('Draft saved :time', ['time' => $this->lastAutosavedAt]);
+    }
+
+    public function submitButtonLabel(): string
+    {
+        return $this->editingSubmittedLog ? __('Save changes') : __('Submit log');
+    }
+
     private function userCanAccessCustomer(): bool
     {
         $netsuiteUserId = Auth::user()?->netsuite_user_id;
@@ -279,7 +333,8 @@ new class extends Component {
 
     private function fillFromLog(CustomerCommunicationLog $log): void
     {
-        $this->draftId = $log->id;
+        $this->logId = $log->id;
+        $this->editingSubmittedLog = ! $log->isDraft();
         $this->contactAt = ($log->contact_at ?? now())->format('Y-m-d\TH:i');
         $this->communicationTypeId = $log->communication_type_id;
         $this->contactPersonName = (string) $log->contact_person_name;
@@ -297,13 +352,13 @@ new class extends Component {
         $this->ensureSummaryBlock();
     }
 
-    private function autosaveDraft(): void
+    private function autosaveLog(): void
     {
-        if ($this->draftId === null) {
+        if ($this->logId === null) {
             return;
         }
 
-        $log = $this->draftLog();
+        $log = $this->currentLog();
 
         Gate::authorize('update', $log);
 
@@ -323,12 +378,10 @@ new class extends Component {
         $this->lastAutosavedAt = now()->format('g:i A');
     }
 
-    private function draftLog(): CustomerCommunicationLog
+    private function currentLog(): CustomerCommunicationLog
     {
         return CustomerCommunicationLog::query()
-            ->where('user_id', Auth::id())
-            ->where('status', CustomerCommunicationLog::STATUS_DRAFT)
-            ->findOrFail($this->draftId);
+            ->findOrFail($this->logId);
     }
 
     private function syncBlocks(CustomerCommunicationLog $log): void
@@ -479,6 +532,12 @@ new class extends Component {
         return (int) data_get($this->customer, 'customer_id');
     }
 
+    private function logBelongsToCurrentCustomer(CustomerCommunicationLog $log): bool
+    {
+        return ($this->customerId() > 0 && $log->netsuite_customer_id === $this->customerId())
+            || $log->customer_account_number === $this->accountNumber;
+    }
+
     private function normalizedContactPersonName(): ?string
     {
         $name = Str::of($this->contactPersonName)->squish()->toString();
@@ -495,9 +554,24 @@ new class extends Component {
         }
     }
 
-    private function resetDraftState(): void
+    private function closeLogFlyout(): void
     {
-        $this->draftId = null;
+        if ($this->logId === null) {
+            $this->resetLogState();
+
+            return;
+        }
+
+        $this->autosaveLog();
+        $this->resetLogState();
+
+        $this->dispatch('communication-log-saved');
+    }
+
+    private function resetLogState(): void
+    {
+        $this->logId = null;
+        $this->editingSubmittedLog = false;
         $this->contactAt = '';
         $this->communicationTypeId = null;
         $this->contactPersonName = '';
@@ -542,14 +616,14 @@ new class extends Component {
         @endif
     @endcan
 
-    @if ($showLogFlyout || $draftId)
+    @if ($showLogFlyout || $logId)
         <flux:modal wire:model.self="showLogFlyout" flyout variant="floating" class="md:w-2xl">
             <form wire:submit="submit" class="space-y-6">
                 <div class="space-y-2">
-                    <flux:heading size="lg">{{ __('Log Communication') }}</flux:heading>
+                    <flux:heading size="lg">{{ $this->flyoutHeading() }}</flux:heading>
                     <flux:text>{{ $this->customerName() }}</flux:text>
                     @if ($lastAutosavedAt)
-                        <flux:text>{{ __('Draft saved :time', ['time' => $lastAutosavedAt]) }}</flux:text>
+                        <flux:text>{{ $this->savedMessage() }}</flux:text>
                     @endif
                 </div>
 
@@ -624,11 +698,9 @@ new class extends Component {
                 </div>
 
                 <div class="flex justify-end gap-2">
-                    <flux:modal.close>
-                        <flux:button type="button" variant="filled">{{ __('Cancel') }}</flux:button>
-                    </flux:modal.close>
+                    <flux:button type="button" variant="filled" wire:click="close">{{ __('Cancel') }}</flux:button>
                     <flux:button type="submit" variant="primary" icon="check">
-                        {{ __('Submit log') }}
+                        {{ $this->submitButtonLabel() }}
                     </flux:button>
                 </div>
             </form>

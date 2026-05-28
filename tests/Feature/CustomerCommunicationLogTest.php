@@ -236,7 +236,164 @@ test('the customer page lists submitted logs with summary time person user and t
         ->assertSee('Alex Buyer')
         ->assertSee($user->name)
         ->assertSee('Phone')
+        ->assertSee('Submitted')
+        ->assertSee('Edit')
         ->assertSee('data-flux-table', false);
+});
+
+test('closing the flyout keeps the draft visible on the customer log table', function () {
+    configureBriarRoseForCustomerLogTests();
+    fakeCustomerAccountLookup();
+
+    $user = permittedSalesRep($this);
+
+    $this->actingAs($user);
+
+    Livewire::test('customer-communication-log-flyout', [
+        'customer' => customerLogPayload(),
+        'accountNumber' => 'A-0999',
+    ])
+        ->call('open')
+        ->set('blocks.0.body', 'Started a draft before the call was ready.')
+        ->call('close')
+        ->assertSet('showLogFlyout', false)
+        ->assertSet('logId', null)
+        ->assertSet('blocks', [])
+        ->assertDispatched('communication-log-saved');
+
+    $draft = CustomerCommunicationLog::query()
+        ->where('status', CustomerCommunicationLog::STATUS_DRAFT)
+        ->sole();
+
+    expect($draft->blocks()->sole()->body)->toBe('Started a draft before the call was ready.');
+
+    $this->get(route('customers.show', ['accountNumber' => 'A-0999']))
+        ->assertOk()
+        ->assertSee('Started a draft before the call was ready.')
+        ->assertSee('Draft')
+        ->assertSee('Continue');
+});
+
+test('clicking a draft row opens the editable flyout instead of the read only details', function () {
+    configureBriarRoseForCustomerLogTests();
+    fakeCustomerAccountLookup();
+
+    $user = permittedSalesRep($this);
+    $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
+    $summaryType = CommunicationBlockType::query()->where('slug', CommunicationBlockType::SUMMARY)->sole();
+
+    $draft = CustomerCommunicationLog::factory()
+        ->for($user)
+        ->for($type, 'communicationType')
+        ->create([
+            'netsuite_customer_id' => 2462,
+            'customer_account_number' => 'A-0999',
+            'status' => CustomerCommunicationLog::STATUS_DRAFT,
+        ]);
+
+    $draft->blocks()->create([
+        'communication_block_type_id' => $summaryType->id,
+        'position' => 0,
+        'body' => 'This draft should reopen in the flyout.',
+    ]);
+
+    $this->actingAs($user);
+
+    Livewire::test('pages::customers.show', ['accountNumber' => 'A-0999'])
+        ->call('viewLog', $draft->id)
+        ->assertSet('showLogDetails', false)
+        ->assertDispatched('open-communication-log-editor');
+});
+
+test('submitted logs open a read only details modal with every block', function () {
+    configureBriarRoseForCustomerLogTests();
+    fakeCustomerAccountLookup();
+
+    $user = permittedSalesRep($this);
+    $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
+    $summaryType = CommunicationBlockType::query()->where('slug', CommunicationBlockType::SUMMARY)->sole();
+    $suggestionType = CommunicationBlockType::query()->where('slug', 'suggestion')->sole();
+
+    $log = CustomerCommunicationLog::factory()
+        ->submitted()
+        ->for($user)
+        ->for($type, 'communicationType')
+        ->create([
+            'netsuite_customer_id' => 2462,
+            'customer_account_number' => 'A-0999',
+            'contact_person_name' => 'Alex Buyer',
+            'contact_at' => '2026-05-28 10:30:00',
+        ]);
+
+    $log->blocks()->createMany([
+        [
+            'communication_block_type_id' => $summaryType->id,
+            'position' => 0,
+            'body' => 'Reviewed open opportunities and confirmed follow up timing.',
+        ],
+        [
+            'communication_block_type_id' => $suggestionType->id,
+            'position' => 1,
+            'body' => 'Send the updated sample kit on the next visit.',
+        ],
+    ]);
+
+    $this->actingAs($user);
+
+    Livewire::test('pages::customers.show', ['accountNumber' => 'A-0999'])
+        ->call('viewLog', $log->id)
+        ->assertSet('showLogDetails', true)
+        ->assertSee('Communication Log')
+        ->assertSee('Reviewed open opportunities and confirmed follow up timing.')
+        ->assertSee('Send the updated sample kit on the next visit.')
+        ->assertSee('Alex Buyer')
+        ->assertSee($user->name);
+});
+
+test('submitted logs can be softly edited from the shared flyout', function () {
+    configureBriarRoseForCustomerLogTests();
+
+    $user = permittedSalesRep($this);
+    $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
+    $summaryType = CommunicationBlockType::query()->where('slug', CommunicationBlockType::SUMMARY)->sole();
+    $submittedAt = now()->subHour();
+
+    $log = CustomerCommunicationLog::factory()
+        ->submitted()
+        ->for($user)
+        ->for($type, 'communicationType')
+        ->create([
+            'netsuite_customer_id' => 2462,
+            'customer_account_number' => 'A-0999',
+            'submitted_at' => $submittedAt,
+        ]);
+
+    $log->blocks()->create([
+        'communication_block_type_id' => $summaryType->id,
+        'position' => 0,
+        'body' => 'Original summary.',
+    ]);
+
+    $this->actingAs($user);
+
+    Livewire::test('customer-communication-log-flyout', [
+        'customer' => customerLogPayload(),
+        'accountNumber' => 'A-0999',
+    ])
+        ->call('openExisting', $log->id)
+        ->assertSet('editingSubmittedLog', true)
+        ->assertSee('Edit Communication')
+        ->set('blocks.0.body', 'Updated summary after reviewing the conversation.')
+        ->call('submit')
+        ->assertHasNoErrors()
+        ->assertDispatched('communication-log-saved');
+
+    $log->refresh();
+
+    expect($log->status)->toBe(CustomerCommunicationLog::STATUS_SUBMITTED)
+        ->and($log->submitted_at?->toDateTimeString())->toBe($submittedAt->toDateTimeString())
+        ->and($log->blocks()->sole()->body)->toBe('Updated summary after reviewing the conversation.')
+        ->and(DB::table('audits')->where('auditable_type', CustomerCommunicationLog::class)->where('auditable_id', $log->id)->exists())->toBeTrue();
 });
 
 test('customer access is limited to the users linked NetSuite sales rep id', function () {
