@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\CustomerCommunicationLog;
 use App\Services\NetSuite\NetSuiteCustomerRepository;
 use Carbon\CarbonInterface;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -40,7 +41,7 @@ new #[Title('Dashboard')] class extends Component {
         }
 
         $this->pipelineCustomerRows = $customers->pipelineForSalesRep($salesRepId);
-        $this->activeCustomerRows = $customers->activeForSalesRep($salesRepId);
+        $this->activeCustomerRows = $this->withLastCommunicationLogs($customers->activeForSalesRep($salesRepId));
     }
 
     /**
@@ -273,6 +274,43 @@ new #[Title('Dashboard')] class extends Component {
     {
         return max(0, (int) config('panopticon.contact_due_warning_days', 2));
     }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $customers
+     * @return array<int, array<string, mixed>>
+     */
+    private function withLastCommunicationLogs(array $customers): array
+    {
+        $customerIds = collect($customers)
+            ->pluck('customer_id')
+            ->filter()
+            ->map(fn ($customerId): int => (int) $customerId)
+            ->unique()
+            ->values();
+
+        if ($customerIds->isEmpty()) {
+            return $customers;
+        }
+
+        $lastLogs = CustomerCommunicationLog::query()
+            ->whereIn('netsuite_customer_id', $customerIds)
+            ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
+            ->selectRaw('netsuite_customer_id, max(contact_at) as last_log_at')
+            ->groupBy('netsuite_customer_id')
+            ->pluck('last_log_at', 'netsuite_customer_id');
+
+        return collect($customers)
+            ->map(function (array $customer) use ($lastLogs): array {
+                $lastLogAt = $lastLogs->get((int) data_get($customer, 'customer_id'));
+
+                if ($lastLogAt !== null) {
+                    $customer['last_log_at'] = $lastLogAt;
+                }
+
+                return $customer;
+            })
+            ->all();
+    }
 };
 ?>
 
@@ -391,7 +429,8 @@ new #[Title('Dashboard')] class extends Component {
 
                     <flux:table.rows>
                         @foreach ($this->paginatedActiveCustomers as $customer)
-                            @php($activeCustomerHref = route('customers.show', ['customer' => data_get($customer, 'customer_id')]))
+                            @php($activeCustomerAccountNumber = data_get($customer, 'account_number') ?: data_get($customer, 'customer_id'))
+                            @php($activeCustomerHref = route('customers.show', ['accountNumber' => $activeCustomerAccountNumber]))
 
                             <flux:table.row :key="'active-customer-'.data_get($customer, 'customer_id')" class="group cursor-pointer hover:bg-zinc-50 dark:hover:bg-white/5">
                                 <flux:table.cell variant="strong">

@@ -26,6 +26,20 @@ class NetSuiteCustomerRepository
     }
 
     /**
+     * @return array<string, mixed>|null
+     */
+    public function findByAccountNumber(string $accountNumber): ?array
+    {
+        $accountNumber = trim($accountNumber);
+
+        if ($accountNumber === '') {
+            return null;
+        }
+
+        return $this->customersForQuery($this->customerByAccountNumberQuery($accountNumber))[0] ?? null;
+    }
+
+    /**
      * @return array<int, array<string, mixed>>
      */
     private function customersForQuery(string $suiteQl): array
@@ -81,14 +95,31 @@ class NetSuiteCustomerRepository
     private function activeCustomersQuery(int $salesRepId): string
     {
         return sprintf(<<<'SQL'
-            SELECT c.id AS customer_id, c.entityid, c.companyname, c.firstname, c.lastname, c.email, c.phone, c.category AS category_id, BUILTIN.DF(c.category) AS category_name, c.salesrep AS sales_rep_id, BUILTIN.DF(c.salesrep) AS sales_rep_name, c.custentity_panopticon_sales_pipeline AS pipeline_owner_id, BUILTIN.DF(c.custentity_panopticon_sales_pipeline) AS pipeline_owner_name, c.custentity_panopticon_comm_cadence AS cadence_id, BUILTIN.DF(c.custentity_panopticon_comm_cadence) AS cadence_name, cadence.scriptid AS cadence_scriptid FROM customer c LEFT JOIN CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS cadence ON cadence.id = c.custentity_panopticon_comm_cadence WHERE c.isinactive = 'F' AND c.salesrep = %d ORDER BY c.entityid
-        SQL, $salesRepId);
+            SELECT %s FROM customer c LEFT JOIN CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS cadence ON cadence.id = c.custentity_panopticon_comm_cadence WHERE c.isinactive = 'F' AND c.salesrep = %d ORDER BY c.entityid
+        SQL, $this->customerSelectColumns(), $salesRepId);
     }
 
     private function pipelineCustomersQuery(int $salesRepId): string
     {
         return sprintf(<<<'SQL'
-            SELECT c.id AS customer_id, c.entityid, c.companyname, c.firstname, c.lastname, c.email, c.phone, c.category AS category_id, BUILTIN.DF(c.category) AS category_name, c.salesrep AS sales_rep_id, BUILTIN.DF(c.salesrep) AS sales_rep_name, c.custentity_panopticon_sales_pipeline AS pipeline_owner_id, BUILTIN.DF(c.custentity_panopticon_sales_pipeline) AS pipeline_owner_name, c.custentity_panopticon_comm_cadence AS cadence_id, BUILTIN.DF(c.custentity_panopticon_comm_cadence) AS cadence_name, cadence.scriptid AS cadence_scriptid FROM customer c LEFT JOIN CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS cadence ON cadence.id = c.custentity_panopticon_comm_cadence WHERE c.isinactive = 'F' AND c.custentity_panopticon_sales_pipeline = %d ORDER BY c.entityid
-        SQL, $salesRepId);
+            SELECT %s FROM customer c LEFT JOIN CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS cadence ON cadence.id = c.custentity_panopticon_comm_cadence WHERE c.isinactive = 'F' AND c.custentity_panopticon_sales_pipeline = %d ORDER BY c.entityid
+        SQL, $this->customerSelectColumns(), $salesRepId);
+    }
+
+    private function customerByAccountNumberQuery(string $accountNumber): string
+    {
+        return sprintf(<<<'SQL'
+            SELECT %s FROM customer c LEFT JOIN CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS cadence ON cadence.id = c.custentity_panopticon_comm_cadence WHERE c.isinactive = 'F' AND c.custentity3 = '%s' ORDER BY c.entityid
+        SQL, $this->customerSelectColumns(), $this->escapeSuiteQlString($accountNumber));
+    }
+
+    private function customerSelectColumns(): string
+    {
+        return 'c.id AS customer_id, c.custentity3 AS account_number, c.entityid, c.companyname, c.firstname, c.lastname, c.email, c.phone, c.category AS category_id, BUILTIN.DF(c.category) AS category_name, c.salesrep AS sales_rep_id, BUILTIN.DF(c.salesrep) AS sales_rep_name, c.custentity_panopticon_sales_pipeline AS pipeline_owner_id, BUILTIN.DF(c.custentity_panopticon_sales_pipeline) AS pipeline_owner_name, c.custentity_panopticon_comm_cadence AS cadence_id, BUILTIN.DF(c.custentity_panopticon_comm_cadence) AS cadence_name, cadence.scriptid AS cadence_scriptid';
+    }
+
+    private function escapeSuiteQlString(string $value): string
+    {
+        return str_replace("'", "''", $value);
     }
 }

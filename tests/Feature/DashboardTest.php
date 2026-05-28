@@ -1,5 +1,7 @@
 <?php
 
+use App\Models\CommunicationType;
+use App\Models\CustomerCommunicationLog;
 use App\Models\User;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Carbon;
@@ -39,6 +41,7 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
                     [
                         'id' => '3001',
                         'customer_id' => '3001',
+                        'account_number' => 'P-3001',
                         'entityid' => 'PROSPECT-3001',
                         'companyname' => 'Pipeline Parts',
                         'email' => 'lead@pipeline.test',
@@ -55,6 +58,7 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
                     [
                         'id' => '2462',
                         'customer_id' => '2462',
+                        'account_number' => 'A-0999',
                         'entityid' => 'CUST-2462',
                         'companyname' => 'Acme Dental',
                         'email' => 'buyer@acme.test',
@@ -74,6 +78,7 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
                     [
                         'id' => '2463',
                         'customer_id' => '2463',
+                        'account_number' => 'B-1001',
                         'entityid' => 'CUST-2463',
                         'companyname' => 'Bright Smiles',
                         'category_id' => '99',
@@ -114,7 +119,7 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
         ->assertSee('sticky top-0 z-20', false)
         ->assertSee('Log')
         ->assertSee('Add log entry')
-        ->assertSee('href="'.route('customers.show', ['customer' => 2462]).'"', false)
+        ->assertSee('href="'.route('customers.show', ['accountNumber' => 'A-0999']).'"', false)
         ->assertSee('wire:navigate', false);
 
     $matchesPipelineCustomerQuery = function (Request $request, int $offset): bool {
@@ -127,6 +132,7 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
             && (int) ($queryParams['limit'] ?? 0) === 1000
             && (int) ($queryParams['offset'] ?? -1) === $offset
             && str_contains($suiteQl, 'CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS')
+            && str_contains($suiteQl, 'c.custentity3 AS account_number')
             && str_contains($suiteQl, 'c.custentity_panopticon_sales_pipeline AS pipeline_owner_id')
             && str_contains($suiteQl, 'c.custentity_panopticon_sales_pipeline = 2214');
     };
@@ -141,6 +147,7 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
             && (int) ($queryParams['limit'] ?? 0) === 1000
             && (int) ($queryParams['offset'] ?? -1) === $offset
             && str_contains($suiteQl, 'CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS')
+            && str_contains($suiteQl, 'c.custentity3 AS account_number')
             && str_contains($suiteQl, 'c.category AS category_id')
             && str_contains($suiteQl, 'BUILTIN.DF(c.category) AS category_name')
             && str_contains($suiteQl, 'c.custentity_panopticon_comm_cadence AS cadence_id')
@@ -170,6 +177,7 @@ test('active customer table paginates and sorts without refetching NetSuite', fu
         ->map(fn (int $number): array => [
             'id' => (string) (3000 + $number),
             'customer_id' => (string) (3000 + $number),
+            'account_number' => sprintf('C-%04d', $number),
             'entityid' => sprintf('CUST-%02d', $number),
             'companyname' => sprintf('Customer %02d', $number),
             'email' => sprintf('customer%02d@example.test', $number),
@@ -365,15 +373,63 @@ test('active customer contact due warning window is configurable', function () {
     ]))->toBe('yellow');
 });
 
-test('authenticated users can visit the customer communication page', function () {
+test('active customer contact due can use the latest submitted local communication log', function () {
+    config()->set('panopticon.contact_due_warning_days', 2);
+    config()->set('briar-rose.account', '1234567');
+    config()->set('briar-rose.consumer_key', 'consumer-key');
+    config()->set('briar-rose.consumer_secret', 'consumer-secret');
+    config()->set('briar-rose.token_id', 'token-id');
+    config()->set('briar-rose.token_secret', 'token-secret');
+    config()->set('briar-rose.rest_base_url', 'https://netsuite.test');
+    config()->set('briar-rose.rest.retries.enabled', false);
+
+    app()->forgetInstance(BriarRoseManager::class);
+
+    $this->travelTo(Carbon::parse('2026-05-28 12:00:00'));
+
     $user = User::factory()->create();
+    $type = CommunicationType::factory()->create();
 
-    $response = $this->actingAs($user)->get(route('customers.show', ['customer' => 2462]));
+    CustomerCommunicationLog::factory()
+        ->submitted()
+        ->for($user)
+        ->for($type, 'communicationType')
+        ->create([
+            'netsuite_customer_id' => 2462,
+            'customer_account_number' => 'A-0999',
+            'contact_at' => Carbon::parse('2026-05-20 12:00:00'),
+        ]);
 
-    $response
-        ->assertOk()
-        ->assertSee('Customer 2462')
-        ->assertSee('Communication');
+    Http::preventStrayRequests();
+    Http::fake([
+        '*' => Http::sequence()
+            ->push([
+                'items' => [],
+                'hasMore' => false,
+            ])
+            ->push([
+                'items' => [
+                    [
+                        'id' => '2462',
+                        'customer_id' => '2462',
+                        'account_number' => 'A-0999',
+                        'entityid' => 'CUST-2462',
+                        'companyname' => 'Acme Dental',
+                        'sales_rep_id' => '2214',
+                        'cadence_name' => 'Monthly',
+                        'cadence_scriptid' => '_P1M',
+                    ],
+                ],
+                'hasMore' => false,
+            ]),
+    ]);
+
+    $this->actingAs($user);
+
+    $dashboard = Livewire::test('pages::dashboard')->instance();
+
+    expect($dashboard->activeCustomerRows[0]['last_log_at'])->not->toBeNull()
+        ->and($dashboard->activeCustomerContactDueLabel($dashboard->activeCustomerRows[0]))->toBe('Due in 3 weeks');
 });
 
 test('linked users without a NetSuite sales rep id see an unlinked dashboard state', function () {
