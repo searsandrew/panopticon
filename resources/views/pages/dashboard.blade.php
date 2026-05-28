@@ -1,7 +1,9 @@
 <?php
 
 use App\Services\NetSuite\NetSuiteCustomerRepository;
+use Carbon\CarbonInterface;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
@@ -89,7 +91,7 @@ new #[Title('Dashboard')] class extends Component {
 
     public function sortActiveCustomers(string $column): void
     {
-        if (! in_array($column, ['customer', 'email', 'phone', 'cadence', 'duration'], true)) {
+        if (! in_array($column, ['customer', 'email', 'phone', 'cadence', 'contact_due'], true)) {
             return;
         }
 
@@ -134,6 +136,56 @@ new #[Title('Dashboard')] class extends Component {
         };
     }
 
+    /**
+     * @param  array<string, mixed>  $customer
+     */
+    public function activeCustomerContactDueLabel(array $customer): string
+    {
+        if ($this->activeCustomerLastContactAt($customer) === null) {
+            return __('Due now');
+        }
+
+        $dueAt = $this->activeCustomerContactDueAt($customer);
+        $now = now();
+
+        if (
+            $dueAt->greaterThanOrEqualTo($now->copy()->subMinute())
+            && $dueAt->lessThanOrEqualTo($now->copy()->addMinute())
+        ) {
+            return __('Due now');
+        }
+
+        $diff = $dueAt->diffForHumans($now, [
+            'syntax' => CarbonInterface::DIFF_ABSOLUTE,
+            'parts' => 1,
+        ]);
+
+        if ($dueAt->lessThan($now)) {
+            return __('Overdue by :time', ['time' => $diff]);
+        }
+
+        return __('Due in :time', ['time' => $diff]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $customer
+     */
+    public function activeCustomerContactDueBadgeColor(array $customer): string
+    {
+        $dueAt = $this->activeCustomerContactDueAt($customer);
+        $now = now();
+
+        if ($dueAt->lessThan($now->copy()->subMinute())) {
+            return 'red';
+        }
+
+        if ($dueAt->lessThanOrEqualTo($now->copy()->addDays($this->contactDueWarningDays()))) {
+            return 'yellow';
+        }
+
+        return 'green';
+    }
+
     #[Computed]
     public function isLinkedToNetSuite(): bool
     {
@@ -156,9 +208,70 @@ new #[Title('Dashboard')] class extends Component {
             'email' => (string) (data_get($customer, 'email') ?: ''),
             'phone' => (string) (data_get($customer, 'phone') ?: ''),
             'cadence' => (string) (data_get($customer, 'cadence_name') ?: ''),
-            'duration' => (string) (data_get($customer, 'cadence_iso8601') ?: ''),
+            'contact_due' => (string) $this->activeCustomerContactDueAt($customer)->getTimestamp(),
             default => (string) (data_get($customer, 'companyname') ?: data_get($customer, 'entityid') ?: ''),
         };
+    }
+
+    /**
+     * @param  array<string, mixed>  $customer
+     */
+    private function activeCustomerContactDueAt(array $customer): CarbonInterface
+    {
+        $lastContactAt = $this->activeCustomerLastContactAt($customer);
+
+        if ($lastContactAt === null) {
+            return now();
+        }
+
+        $cadenceIso8601 = data_get($customer, 'cadence_iso8601');
+
+        if (! is_string($cadenceIso8601) || trim($cadenceIso8601) === '') {
+            return now();
+        }
+
+        try {
+            return $lastContactAt->copy()->add(new \DateInterval($cadenceIso8601));
+        } catch (\Throwable) {
+            return now();
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $customer
+     */
+    private function activeCustomerLastContactAt(array $customer): ?CarbonInterface
+    {
+        foreach (['last_log_at', 'last_contact_at', 'last_contacted_at', 'last_communication_at'] as $key) {
+            $value = data_get($customer, $key);
+
+            if ($value instanceof Carbon) {
+                return $value->copy();
+            }
+
+            if ($value instanceof \DateTimeInterface) {
+                return Carbon::instance($value);
+            }
+
+            if (is_int($value)) {
+                return Carbon::createFromTimestamp($value);
+            }
+
+            if (is_string($value) && trim($value) !== '') {
+                try {
+                    return Carbon::parse($value);
+                } catch (\Throwable) {
+                    continue;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function contactDueWarningDays(): int
+    {
+        return max(0, (int) config('panopticon.contact_due_warning_days', 2));
     }
 };
 ?>
@@ -268,11 +381,11 @@ new #[Title('Dashboard')] class extends Component {
                         </flux:table.column>
                         <flux:table.column
                             sortable
-                            :sorted="$this->activeCustomerSortColumn === 'duration'"
+                            :sorted="$this->activeCustomerSortColumn === 'contact_due'"
                             :direction="$this->activeCustomerSortDirection"
-                            wire:click="sortActiveCustomers('duration')"
+                            wire:click="sortActiveCustomers('contact_due')"
                         >
-                            {{ __('Duration') }}
+                            {{ __('Contact Due') }}
                         </flux:table.column>
                     </flux:table.columns>
 
@@ -307,9 +420,11 @@ new #[Title('Dashboard')] class extends Component {
                                         {{ data_get($customer, 'cadence_name') ?: __('Not set') }}
                                     </a>
                                 </flux:table.cell>
-                                <flux:table.cell class="font-mono text-xs">
+                                <flux:table.cell>
                                     <a href="{{ $activeCustomerHref }}" wire:navigate class="-m-3 block px-3 py-3">
-                                        {{ data_get($customer, 'cadence_iso8601') ?: __('N/A') }}
+                                        <flux:badge size="sm" inset="top bottom" color="{{ $this->activeCustomerContactDueBadgeColor($customer) }}">
+                                            {{ $this->activeCustomerContactDueLabel($customer) }}
+                                        </flux:badge>
                                     </a>
                                 </flux:table.cell>
                             </flux:table.row>

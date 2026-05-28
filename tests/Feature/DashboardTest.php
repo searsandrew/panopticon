@@ -2,6 +2,7 @@
 
 use App\Models\User;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
 use Searsandrew\BriarRose\BriarRoseManager;
@@ -103,9 +104,11 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
         ->assertSee('bg-zinc-400/15', false)
         ->assertSee('Monthly')
         ->assertSee('Quarterly')
-        ->assertSee('P3M')
         ->assertSee('Annually')
-        ->assertSee('P1Y')
+        ->assertSee('Contact Due')
+        ->assertSee('Due now')
+        ->assertSee('bg-yellow-400/25', false)
+        ->assertDontSee('Duration')
         ->assertSee('data-flux-card', false)
         ->assertSee('data-flux-table', false)
         ->assertSee('sticky top-0 z-20', false)
@@ -202,7 +205,9 @@ test('active customer table paginates and sorts without refetching NetSuite', fu
         ->call('sortActiveCustomers', 'customer')
         ->assertSet('activeCustomerSortDirection', 'desc')
         ->assertSeeText('Customer 12')
-        ->assertDontSeeText('Customer 01');
+        ->assertDontSeeText('Customer 01')
+        ->call('sortActiveCustomers', 'contact_due')
+        ->assertSet('activeCustomerSortColumn', 'contact_due');
 
     Http::assertSentCount(2);
 });
@@ -253,6 +258,111 @@ test('active customer category badges map known categories and fallback categori
     expect($dashboard->activeCustomerCategoryBadgeColor(['category_name' => 'Dealer']))->toBe('zinc');
     expect($dashboard->activeCustomerCategoryBadgeColor([]))->toBe('zinc');
     expect($dashboard->activeCustomerCategoryLabel([]))->toBe('Uncategorized');
+});
+
+test('active customer contact due uses last log and cadence and defaults untouched customers to now', function () {
+    config()->set('panopticon.contact_due_warning_days', 2);
+    config()->set('briar-rose.account', '1234567');
+    config()->set('briar-rose.consumer_key', 'consumer-key');
+    config()->set('briar-rose.consumer_secret', 'consumer-secret');
+    config()->set('briar-rose.token_id', 'token-id');
+    config()->set('briar-rose.token_secret', 'token-secret');
+    config()->set('briar-rose.rest_base_url', 'https://netsuite.test');
+    config()->set('briar-rose.rest.retries.enabled', false);
+
+    app()->forgetInstance(BriarRoseManager::class);
+
+    Http::preventStrayRequests();
+    Http::fake([
+        '*' => Http::sequence()
+            ->push([
+                'items' => [],
+                'hasMore' => false,
+            ])
+            ->push([
+                'items' => [],
+                'hasMore' => false,
+            ]),
+    ]);
+
+    $this->travelTo(Carbon::parse('2026-05-28 12:00:00'));
+
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    $dashboard = Livewire::test('pages::dashboard')->instance();
+
+    expect($dashboard->activeCustomerContactDueLabel([
+        'cadence_iso8601' => 'P3M',
+    ]))->toBe('Due now');
+    expect($dashboard->activeCustomerContactDueBadgeColor([
+        'cadence_iso8601' => 'P3M',
+    ]))->toBe('yellow');
+
+    expect($dashboard->activeCustomerContactDueLabel([
+        'last_log_at' => '2026-02-28 12:00:00',
+        'cadence_iso8601' => 'P3M',
+    ]))->toBe('Due now');
+    expect($dashboard->activeCustomerContactDueBadgeColor([
+        'last_log_at' => '2026-02-28 12:00:00',
+        'cadence_iso8601' => 'P3M',
+    ]))->toBe('yellow');
+
+    expect($dashboard->activeCustomerContactDueLabel([
+        'last_log_at' => '2026-01-28 12:00:00',
+        'cadence_iso8601' => 'P3M',
+    ]))->toBe('Overdue by 1 month');
+    expect($dashboard->activeCustomerContactDueBadgeColor([
+        'last_log_at' => '2026-01-28 12:00:00',
+        'cadence_iso8601' => 'P3M',
+    ]))->toBe('red');
+
+    expect($dashboard->activeCustomerContactDueLabel([
+        'last_log_at' => '2026-05-28 12:00:00',
+        'cadence_iso8601' => 'P1M',
+    ]))->toBe('Due in 1 month');
+    expect($dashboard->activeCustomerContactDueBadgeColor([
+        'last_log_at' => '2026-05-28 12:00:00',
+        'cadence_iso8601' => 'P1M',
+    ]))->toBe('green');
+});
+
+test('active customer contact due warning window is configurable', function () {
+    config()->set('panopticon.contact_due_warning_days', 5);
+    config()->set('briar-rose.account', '1234567');
+    config()->set('briar-rose.consumer_key', 'consumer-key');
+    config()->set('briar-rose.consumer_secret', 'consumer-secret');
+    config()->set('briar-rose.token_id', 'token-id');
+    config()->set('briar-rose.token_secret', 'token-secret');
+    config()->set('briar-rose.rest_base_url', 'https://netsuite.test');
+    config()->set('briar-rose.rest.retries.enabled', false);
+
+    app()->forgetInstance(BriarRoseManager::class);
+
+    Http::preventStrayRequests();
+    Http::fake([
+        '*' => Http::sequence()
+            ->push([
+                'items' => [],
+                'hasMore' => false,
+            ])
+            ->push([
+                'items' => [],
+                'hasMore' => false,
+            ]),
+    ]);
+
+    $this->travelTo(Carbon::parse('2026-05-28 12:00:00'));
+
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    $dashboard = Livewire::test('pages::dashboard')->instance();
+
+    expect($dashboard->activeCustomerContactDueBadgeColor([
+        'last_log_at' => '2026-05-28 12:00:00',
+        'cadence_iso8601' => 'P4D',
+    ]))->toBe('yellow');
 });
 
 test('authenticated users can visit the customer communication page', function () {
