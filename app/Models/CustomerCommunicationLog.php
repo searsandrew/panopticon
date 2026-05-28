@@ -35,6 +35,13 @@ class CustomerCommunicationLog extends Model implements Auditable
     /** @use HasFactory<CustomerCommunicationLogFactory> */
     use AuditableTrait, HasFactory, HasUlids, SoftDeletes;
 
+    /**
+     * @var array<int, string>
+     */
+    protected $auditExclude = [
+        'last_autosaved_at',
+    ];
+
     public const STATUS_DRAFT = 'draft';
 
     public const STATUS_SUBMITTED = 'submitted';

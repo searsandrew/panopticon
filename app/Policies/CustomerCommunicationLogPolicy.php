@@ -52,6 +52,15 @@ class CustomerCommunicationLogPolicy
     }
 
     /**
+     * Determine whether the user can view audit history for the model.
+     */
+    public function viewAuditHistory(User $user, CustomerCommunicationLog $customerCommunicationLog): bool
+    {
+        return $user->can('communication-logs.view-audits')
+            && $this->canAccessLog($user, $customerCommunicationLog);
+    }
+
+    /**
      * Determine whether the user can restore the model.
      */
     public function restore(User $user, CustomerCommunicationLog $customerCommunicationLog): bool

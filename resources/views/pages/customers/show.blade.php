@@ -1,10 +1,12 @@
 <?php
 
 use App\Models\CommunicationBlockType;
+use App\Models\CommunicationType;
 use App\Models\CustomerCommunicationLog;
 use App\Models\CustomerCommunicationLogBlock;
 use App\Services\NetSuite\NetSuiteCustomerRepository;
 use Carbon\CarbonInterface;
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Auth;
@@ -14,11 +16,22 @@ use Livewire\Attributes\Computed;
 use Livewire\Attributes\On;
 use Livewire\Component;
 use Livewire\WithPagination;
+use OwenIt\Auditing\Models\Audit;
 
 new class extends Component {
     use WithPagination;
 
     private const COMMUNICATION_LOGS_PAGE = 'communication-logs-page';
+
+    private const VISIBLE_AUDIT_ATTRIBUTES = [
+        'communication_type_id',
+        'communication_block_type_id',
+        'contact_person_name',
+        'contact_at',
+        'status',
+        'submitted_at',
+        'body',
+    ];
 
     public string $accountNumber = '';
 
@@ -28,6 +41,8 @@ new class extends Component {
     public array $customer = [];
 
     public bool $showLogDetails = false;
+
+    public bool $showLogHistory = false;
 
     public ?string $selectedLogId = null;
 
@@ -66,6 +81,8 @@ new class extends Component {
     #[On('communication-log-saved')]
     public function communicationLogSaved(): void
     {
+        unset($this->communicationLogs);
+
         $this->resetPage(self::COMMUNICATION_LOGS_PAGE);
     }
 
@@ -93,13 +110,46 @@ new class extends Component {
 
         $this->selectedLogId = null;
         $this->showLogDetails = false;
+        $this->showLogHistory = false;
 
         $this->dispatch('open-communication-log-editor', logId: $log->id);
     }
 
+    public function viewLogHistory(string $logId): void
+    {
+        $log = $this->findLogForCurrentCustomer($logId);
+
+        Gate::authorize('viewAuditHistory', $log);
+
+        $this->selectedLogId = $log->id;
+        $this->showLogDetails = false;
+        $this->showLogHistory = true;
+    }
+
+    public function viewSelectedLogDetails(): void
+    {
+        if ($this->selectedLogId === null) {
+            return;
+        }
+
+        $log = $this->findLogForCurrentCustomer($this->selectedLogId);
+
+        Gate::authorize('view', $log);
+
+        $this->showLogHistory = false;
+        $this->showLogDetails = true;
+    }
+
     public function updatedShowLogDetails(bool $value): void
     {
-        if (! $value) {
+        if (! $value && ! $this->showLogHistory) {
+            $this->selectedLogId = null;
+        }
+    }
+
+    public function updatedShowLogHistory(bool $value): void
+    {
+        if (! $value && ! $this->showLogDetails) {
             $this->selectedLogId = null;
         }
     }
@@ -139,7 +189,7 @@ new class extends Component {
 
     public function statusBadgeColor(CustomerCommunicationLog $log): string
     {
-        return $log->isDraft() ? 'amber' : 'emerald';
+        return $log->isDraft() ? 'zinc' : 'emerald';
     }
 
     public function statusLabel(CustomerCommunicationLog $log): string
@@ -157,6 +207,22 @@ new class extends Component {
             'assistance' => 'emerald',
             default => 'zinc',
         };
+    }
+
+    public function communicationTypeIcon(CustomerCommunicationLog $log): string
+    {
+        return match ($log->communicationType?->slug) {
+            'phone' => 'phone',
+            'email' => 'at-symbol',
+            'text' => 'chat-bubble-left-right',
+            'visit' => 'map-pin',
+            default => 'question-mark-circle',
+        };
+    }
+
+    public function customerDisplayName(CustomerCommunicationLog $log): string
+    {
+        return (string) ($log->customer_name ?: $this->customerName());
     }
 
     public function summaryFor(CustomerCommunicationLog $log): string
@@ -204,6 +270,127 @@ new class extends Component {
         return $log->blocks
             ->sortBy('position')
             ->values();
+    }
+
+    /**
+     * @return Collection<int, Audit>
+     */
+    public function auditHistory(CustomerCommunicationLog $log): Collection
+    {
+        Gate::authorize('viewAuditHistory', $log);
+
+        $blockIds = $log->blocks->pluck('id')->all();
+        $blockMorphClass = (new CustomerCommunicationLogBlock)->getMorphClass();
+
+        return Audit::query()
+            ->with('user')
+            ->where(function ($query) use ($blockIds, $blockMorphClass, $log): void {
+                $query->where(function ($query) use ($log): void {
+                    $query
+                        ->where('auditable_type', $log->getMorphClass())
+                        ->where('auditable_id', $log->getKey());
+                });
+
+                if ($blockIds !== []) {
+                    $query->orWhere(function ($query) use ($blockIds, $blockMorphClass): void {
+                        $query
+                            ->where('auditable_type', $blockMorphClass)
+                            ->whereIn('auditable_id', $blockIds);
+                    });
+                }
+            })
+            ->latest()
+            ->get()
+            ->filter(fn (Audit $audit): bool => $this->visibleAuditChanges($audit) !== [])
+            ->values();
+    }
+
+    /**
+     * @return array<string, array{old?: mixed, new?: mixed}>
+     */
+    public function visibleAuditChanges(Audit $audit): array
+    {
+        return collect($audit->getModified())
+            ->only(self::VISIBLE_AUDIT_ATTRIBUTES)
+            ->reject(fn (array $change): bool => $change === [])
+            ->all();
+    }
+
+    public function auditEventLabel(Audit $audit): string
+    {
+        return match ($audit->event) {
+            'created' => __('Created'),
+            'updated' => __('Updated'),
+            'deleted' => __('Deleted'),
+            default => Str::headline((string) $audit->event),
+        };
+    }
+
+    public function auditSubjectLabel(Audit $audit, CustomerCommunicationLog $log): string
+    {
+        if ($audit->auditable_type === $log->getMorphClass()) {
+            return __('Log details');
+        }
+
+        $block = $log->blocks->firstWhere('id', $audit->auditable_id);
+
+        return __(':type block', [
+            'type' => $block?->blockType?->name ?? __('Note'),
+        ]);
+    }
+
+    public function auditActorName(Audit $audit): string
+    {
+        return (string) ($audit->user?->name ?? __('System'));
+    }
+
+    public function auditCreatedAtLabel(Audit $audit): string
+    {
+        return $audit->created_at instanceof CarbonInterface
+            ? $audit->created_at->format('M j, g:i A')
+            : __('N/A');
+    }
+
+    public function auditAttributeLabel(string $attribute): string
+    {
+        return match ($attribute) {
+            'communication_type_id' => __('Communication type'),
+            'communication_block_type_id' => __('Block type'),
+            'contact_person_name' => __('Contact person'),
+            'contact_at' => __('Contact date'),
+            'submitted_at' => __('Submitted date'),
+            'body' => __('Note'),
+            default => Str::headline($attribute),
+        };
+    }
+
+    public function auditValueLabel(string $attribute, mixed $value): string
+    {
+        if ($value === null || $value === '') {
+            return __('Blank');
+        }
+
+        if ($attribute === 'communication_type_id') {
+            return (string) (CommunicationType::query()->find($value)?->name ?? $value);
+        }
+
+        if ($attribute === 'communication_block_type_id') {
+            return (string) (CommunicationBlockType::query()->find($value)?->name ?? $value);
+        }
+
+        if (in_array($attribute, ['contact_at', 'submitted_at'], true)) {
+            try {
+                return CarbonImmutable::parse($value)->format('M j, g:i A');
+            } catch (Throwable) {
+                return (string) $value;
+            }
+        }
+
+        if ($attribute === 'status') {
+            return Str::headline((string) $value);
+        }
+
+        return Str::limit((string) $value, 220);
     }
 
     public function render()
@@ -309,10 +496,10 @@ new class extends Component {
                                 wire:click="viewLog('{{ $log->id }}')"
                                 class="cursor-pointer hover:bg-zinc-50 dark:hover:bg-white/5"
                             >
-                                <flux:table.cell class="whitespace-nowrap flex flex-row items-center gap-2">
+                                <flux:table.cell class="flex min-w-0 flex-row items-center gap-2 whitespace-nowrap">
                                     <flux:avatar :name="$log->user?->name ?? __('Unknown')" color="auto" circle>
                                         <x-slot:badge>
-                                            <flux:icon variant="micro" :name="$log->communicationType?->slug" />
+                                            <flux:icon variant="micro" :name="$this->communicationTypeIcon($log)" />
                                         </x-slot:badge>
                                     </flux:avatar>
                                     {{ $log->contact_person_name ?: __('N/A') }}
@@ -409,12 +596,100 @@ new class extends Component {
                     @endforeach
                 </div>
 
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    @can('viewAuditHistory', $selectedLog)
+                        <flux:button type="button" variant="ghost" icon="clock" wire:click="viewLogHistory('{{ $selectedLog->id }}')">
+                            {{ __('History') }}
+                        </flux:button>
+                    @else
+                        <div></div>
+                    @endcan
+
+                    <div class="flex justify-end gap-2">
+                        <flux:modal.close>
+                            <flux:button type="button" variant="filled">{{ __('Close') }}</flux:button>
+                        </flux:modal.close>
+                        <flux:button type="button" variant="primary" icon="pencil" wire:click="editLog('{{ $selectedLog->id }}')">
+                            {{ __('Edit') }}
+                        </flux:button>
+                    </div>
+                </div>
+            </div>
+        @endif
+    </flux:modal>
+
+    <flux:modal wire:model.self="showLogHistory" class="md:w-3xl">
+        @if ($historyLog = $this->selectedLog())
+            <div class="space-y-6">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div class="space-y-1">
+                        <flux:heading size="lg">{{ __('History & Edits') }}</flux:heading>
+                        <flux:text>{{ $this->customerDisplayName($historyLog) }}</flux:text>
+                    </div>
+
+                    <flux:badge size="sm" color="{{ $this->statusBadgeColor($historyLog) }}">
+                        {{ $this->statusLabel($historyLog) }}
+                    </flux:badge>
+                </div>
+
+                @php($audits = $this->auditHistory($historyLog))
+
+                @if ($audits->isEmpty())
+                    <div class="rounded-lg border border-zinc-200 p-4 text-sm text-zinc-600 dark:border-white/10 dark:text-zinc-300">
+                        {{ __('No visible edit history yet.') }}
+                    </div>
+                @else
+                    <div class="space-y-4">
+                        @foreach ($audits as $audit)
+                            <div class="space-y-4 rounded-lg border border-zinc-200 p-4 dark:border-white/10">
+                                <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <flux:badge size="sm" color="{{ $audit->event === 'created' ? 'emerald' : 'blue' }}">
+                                            {{ $this->auditEventLabel($audit) }}
+                                        </flux:badge>
+                                        <span class="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                                            {{ $this->auditSubjectLabel($audit, $historyLog) }}
+                                        </span>
+                                    </div>
+                                    <div class="text-sm text-zinc-500 dark:text-zinc-400">
+                                        {{ __(':user · :date', ['user' => $this->auditActorName($audit), 'date' => $this->auditCreatedAtLabel($audit)]) }}
+                                    </div>
+                                </div>
+
+                                <div class="space-y-3">
+                                    @foreach ($this->visibleAuditChanges($audit) as $attribute => $change)
+                                        <div class="grid gap-2 text-sm sm:grid-cols-[9rem_1fr]">
+                                            <div class="font-medium text-zinc-700 dark:text-zinc-200">
+                                                {{ $this->auditAttributeLabel($attribute) }}
+                                            </div>
+                                            <div class="min-w-0 space-y-1 text-zinc-600 dark:text-zinc-300">
+                                                @if (array_key_exists('old', $change))
+                                                    <div>
+                                                        <span class="text-zinc-400 dark:text-zinc-500">{{ __('From') }}</span>
+                                                        <span class="ml-1 wrap-break-word">{{ $this->auditValueLabel($attribute, $change['old']) }}</span>
+                                                    </div>
+                                                @endif
+                                                @if (array_key_exists('new', $change))
+                                                    <div>
+                                                        <span class="text-zinc-400 dark:text-zinc-500">{{ __('To') }}</span>
+                                                        <span class="ml-1 wrap-break-word">{{ $this->auditValueLabel($attribute, $change['new']) }}</span>
+                                                    </div>
+                                                @endif
+                                            </div>
+                                        </div>
+                                    @endforeach
+                                </div>
+                            </div>
+                        @endforeach
+                    </div>
+                @endif
+
                 <div class="flex justify-end gap-2">
                     <flux:modal.close>
                         <flux:button type="button" variant="filled">{{ __('Close') }}</flux:button>
                     </flux:modal.close>
-                    <flux:button type="button" variant="primary" icon="pencil" wire:click="editLog('{{ $selectedLog->id }}')">
-                        {{ __('Edit') }}
+                    <flux:button type="button" variant="primary" icon="document-text" wire:click="viewSelectedLogDetails">
+                        {{ __('View log') }}
                     </flux:button>
                 </div>
             </div>

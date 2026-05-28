@@ -68,6 +68,7 @@ class CommunicationLoggingSeeder extends Seeder
             'communication-logs.create',
             'communication-logs.update',
             'communication-logs.delete',
+            'communication-logs.view-audits',
             'communication-types.view',
             'communication-types.create',
             'communication-types.update',
