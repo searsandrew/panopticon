@@ -103,6 +103,37 @@ new #[Title('Dashboard')] class extends Component {
         $this->resetPage(self::ACTIVE_CUSTOMERS_PAGE);
     }
 
+    /**
+     * @param  array<string, mixed>  $customer
+     */
+    public function activeCustomerCategoryLabel(array $customer): string
+    {
+        $categoryName = data_get($customer, 'category_name');
+
+        if (is_string($categoryName) && trim($categoryName) !== '') {
+            return trim($categoryName);
+        }
+
+        return __('Uncategorized');
+    }
+
+    /**
+     * @param  array<string, mixed>  $customer
+     */
+    public function activeCustomerCategoryBadgeColor(array $customer): string
+    {
+        return match (strtoupper($this->activeCustomerCategoryLabel($customer))) {
+            'APW1' => 'blue',
+            'APW2' => 'sky',
+            'APW3' => 'indigo',
+            'COMMERCIAL' => 'emerald',
+            'COMMERCIAL SERVICE' => 'teal',
+            'EXTENDED WARRANTY' => 'amber',
+            'OEM' => 'purple',
+            default => 'zinc',
+        };
+    }
+
     #[Computed]
     public function isLinkedToNetSuite(): bool
     {
@@ -252,7 +283,13 @@ new #[Title('Dashboard')] class extends Component {
                             <flux:table.row :key="'active-customer-'.data_get($customer, 'customer_id')" class="group cursor-pointer hover:bg-zinc-50 dark:hover:bg-white/5">
                                 <flux:table.cell variant="strong">
                                     <a href="{{ $activeCustomerHref }}" wire:navigate class="-m-3 block px-3 py-3">
-                                        {{ data_get($customer, 'companyname') ?: data_get($customer, 'entityid') }}
+                                        <span class="flex items-center gap-2">
+                                            <flux:badge size="sm" inset="top bottom" color="{{ $this->activeCustomerCategoryBadgeColor($customer) }}">
+                                                {{ $this->activeCustomerCategoryLabel($customer) }}
+                                            </flux:badge>
+
+                                            <span>{{ data_get($customer, 'companyname') ?: data_get($customer, 'entityid') }}</span>
+                                        </span>
                                     </a>
                                 </flux:table.cell>
                                 <flux:table.cell>

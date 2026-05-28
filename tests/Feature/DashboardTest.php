@@ -58,6 +58,8 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
                         'companyname' => 'Acme Dental',
                         'email' => 'buyer@acme.test',
                         'phone' => '555-0101',
+                        'category_id' => '11',
+                        'category_name' => 'APW1',
                         'sales_rep_id' => '2214',
                         'cadence_id' => '1',
                         'cadence_name' => 'Quarterly',
@@ -73,6 +75,8 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
                         'customer_id' => '2463',
                         'entityid' => 'CUST-2463',
                         'companyname' => 'Bright Smiles',
+                        'category_id' => '99',
+                        'category_name' => 'Dealer',
                         'sales_rep_id' => '2214',
                         'cadence_id' => '2',
                         'cadence_name' => 'Annually',
@@ -93,6 +97,10 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
         ->assertSee('Pipeline Parts')
         ->assertSee('Acme Dental')
         ->assertSee('Bright Smiles')
+        ->assertSee('APW1')
+        ->assertSee('Dealer')
+        ->assertSee('bg-blue-400/20', false)
+        ->assertSee('bg-zinc-400/15', false)
         ->assertSee('Monthly')
         ->assertSee('Quarterly')
         ->assertSee('P3M')
@@ -130,6 +138,8 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
             && (int) ($queryParams['limit'] ?? 0) === 1000
             && (int) ($queryParams['offset'] ?? -1) === $offset
             && str_contains($suiteQl, 'CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS')
+            && str_contains($suiteQl, 'c.category AS category_id')
+            && str_contains($suiteQl, 'BUILTIN.DF(c.category) AS category_name')
             && str_contains($suiteQl, 'c.custentity_panopticon_comm_cadence AS cadence_id')
             && str_contains($suiteQl, 'cadence.scriptid AS cadence_scriptid')
             && str_contains($suiteQl, 'c.salesrep = 2214');
@@ -195,6 +205,54 @@ test('active customer table paginates and sorts without refetching NetSuite', fu
         ->assertDontSeeText('Customer 01');
 
     Http::assertSentCount(2);
+});
+
+test('active customer category badges map known categories and fallback categories to colors', function () {
+    config()->set('briar-rose.account', '1234567');
+    config()->set('briar-rose.consumer_key', 'consumer-key');
+    config()->set('briar-rose.consumer_secret', 'consumer-secret');
+    config()->set('briar-rose.token_id', 'token-id');
+    config()->set('briar-rose.token_secret', 'token-secret');
+    config()->set('briar-rose.rest_base_url', 'https://netsuite.test');
+    config()->set('briar-rose.rest.retries.enabled', false);
+
+    app()->forgetInstance(BriarRoseManager::class);
+
+    Http::preventStrayRequests();
+    Http::fake([
+        '*' => Http::sequence()
+            ->push([
+                'items' => [],
+                'hasMore' => false,
+            ])
+            ->push([
+                'items' => [],
+                'hasMore' => false,
+            ]),
+    ]);
+
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    $dashboard = Livewire::test('pages::dashboard')->instance();
+    $knownCategoryColors = [
+        'APW1' => 'blue',
+        'APW2' => 'sky',
+        'APW3' => 'indigo',
+        'Commercial' => 'emerald',
+        'Commercial Service' => 'teal',
+        'Extended Warranty' => 'amber',
+        'OEM' => 'purple',
+    ];
+
+    foreach ($knownCategoryColors as $category => $color) {
+        expect($dashboard->activeCustomerCategoryBadgeColor(['category_name' => $category]))->toBe($color);
+    }
+
+    expect(array_unique(array_values($knownCategoryColors)))->toHaveCount(count($knownCategoryColors));
+    expect($dashboard->activeCustomerCategoryBadgeColor(['category_name' => 'Dealer']))->toBe('zinc');
+    expect($dashboard->activeCustomerCategoryBadgeColor([]))->toBe('zinc');
+    expect($dashboard->activeCustomerCategoryLabel([]))->toBe('Uncategorized');
 });
 
 test('authenticated users can visit the customer communication page', function () {

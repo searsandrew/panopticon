@@ -81,14 +81,14 @@ class NetSuiteCustomerRepository
     private function activeCustomersQuery(int $salesRepId): string
     {
         return sprintf(<<<'SQL'
-            SELECT c.id AS customer_id, c.entityid, c.companyname, c.firstname, c.lastname, c.email, c.phone, c.salesrep AS sales_rep_id, BUILTIN.DF(c.salesrep) AS sales_rep_name, c.custentity_panopticon_sales_pipeline AS pipeline_owner_id, BUILTIN.DF(c.custentity_panopticon_sales_pipeline) AS pipeline_owner_name, c.custentity_panopticon_comm_cadence AS cadence_id, BUILTIN.DF(c.custentity_panopticon_comm_cadence) AS cadence_name, cadence.scriptid AS cadence_scriptid FROM customer c LEFT JOIN CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS cadence ON cadence.id = c.custentity_panopticon_comm_cadence WHERE c.isinactive = 'F' AND c.salesrep = %d ORDER BY c.entityid
+            SELECT c.id AS customer_id, c.entityid, c.companyname, c.firstname, c.lastname, c.email, c.phone, c.category AS category_id, BUILTIN.DF(c.category) AS category_name, c.salesrep AS sales_rep_id, BUILTIN.DF(c.salesrep) AS sales_rep_name, c.custentity_panopticon_sales_pipeline AS pipeline_owner_id, BUILTIN.DF(c.custentity_panopticon_sales_pipeline) AS pipeline_owner_name, c.custentity_panopticon_comm_cadence AS cadence_id, BUILTIN.DF(c.custentity_panopticon_comm_cadence) AS cadence_name, cadence.scriptid AS cadence_scriptid FROM customer c LEFT JOIN CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS cadence ON cadence.id = c.custentity_panopticon_comm_cadence WHERE c.isinactive = 'F' AND c.salesrep = %d ORDER BY c.entityid
         SQL, $salesRepId);
     }
 
     private function pipelineCustomersQuery(int $salesRepId): string
     {
         return sprintf(<<<'SQL'
-            SELECT c.id AS customer_id, c.entityid, c.companyname, c.firstname, c.lastname, c.email, c.phone, c.salesrep AS sales_rep_id, BUILTIN.DF(c.salesrep) AS sales_rep_name, c.custentity_panopticon_sales_pipeline AS pipeline_owner_id, BUILTIN.DF(c.custentity_panopticon_sales_pipeline) AS pipeline_owner_name, c.custentity_panopticon_comm_cadence AS cadence_id, BUILTIN.DF(c.custentity_panopticon_comm_cadence) AS cadence_name, cadence.scriptid AS cadence_scriptid FROM customer c LEFT JOIN CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS cadence ON cadence.id = c.custentity_panopticon_comm_cadence WHERE c.isinactive = 'F' AND c.custentity_panopticon_sales_pipeline = %d ORDER BY c.entityid
+            SELECT c.id AS customer_id, c.entityid, c.companyname, c.firstname, c.lastname, c.email, c.phone, c.category AS category_id, BUILTIN.DF(c.category) AS category_name, c.salesrep AS sales_rep_id, BUILTIN.DF(c.salesrep) AS sales_rep_name, c.custentity_panopticon_sales_pipeline AS pipeline_owner_id, BUILTIN.DF(c.custentity_panopticon_sales_pipeline) AS pipeline_owner_name, c.custentity_panopticon_comm_cadence AS cadence_id, BUILTIN.DF(c.custentity_panopticon_comm_cadence) AS cadence_name, cadence.scriptid AS cadence_scriptid FROM customer c LEFT JOIN CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS cadence ON cadence.id = c.custentity_panopticon_comm_cadence WHERE c.isinactive = 'F' AND c.custentity_panopticon_sales_pipeline = %d ORDER BY c.entityid
         SQL, $salesRepId);
     }
 }
