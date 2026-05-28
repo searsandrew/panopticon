@@ -1,22 +1,23 @@
 <?php
 
 use App\Models\CommunicationBlockType;
-use App\Models\CommunicationType;
 use App\Models\CustomerCommunicationLog;
-use App\Models\CustomerCommunicationLogBlock;
-use App\Models\CustomerContact;
 use App\Services\NetSuite\NetSuiteCustomerRepository;
-use Illuminate\Database\Eloquent\Collection;
-use Illuminate\Support\Carbon;
+use Carbon\CarbonInterface;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
-use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Computed;
+use Livewire\Attributes\On;
 use Livewire\Component;
+use Livewire\WithPagination;
 
 new class extends Component {
+    use WithPagination;
+
+    private const COMMUNICATION_LOGS_PAGE = 'communication-logs-page';
+
     public string $accountNumber = '';
 
     /**
@@ -24,24 +25,9 @@ new class extends Component {
      */
     public array $customer = [];
 
-    public ?string $draftId = null;
-
-    public string $contactAt = '';
-
-    public ?string $communicationTypeId = null;
-
-    public string $contactPersonName = '';
-
-    /**
-     * @var array<int, array{id: string|null, communication_block_type_id: string|null, body: string}>
-     */
-    public array $blocks = [];
-
-    public ?string $lastAutosavedAt = null;
-
     public function mount(string $accountNumber, NetSuiteCustomerRepository $customers): void
     {
-        Gate::authorize('create', CustomerCommunicationLog::class);
+        Gate::authorize('viewAny', CustomerCommunicationLog::class);
 
         $customer = $customers->findByAccountNumber($accountNumber);
 
@@ -50,123 +36,23 @@ new class extends Component {
 
         $this->customer = $customer;
         $this->accountNumber = (string) (data_get($customer, 'account_number') ?: $accountNumber);
-
-        $this->loadOrCreateDraft();
     }
 
-    public function updated(string $property): void
-    {
-        if (
-            in_array($property, ['contactAt', 'communicationTypeId', 'contactPersonName'], true)
-            || str_starts_with($property, 'blocks.')
-        ) {
-            $this->autosaveDraft();
-        }
-    }
-
-    public function addBlock(): void
-    {
-        Gate::authorize('update', $this->draftLog());
-
-        $type = $this->defaultAdditionalBlockType();
-
-        $this->blocks[] = [
-            'id' => null,
-            'communication_block_type_id' => $type?->id,
-            'body' => '',
-        ];
-
-        $this->autosaveDraft();
-    }
-
-    public function removeBlock(int $index): void
-    {
-        Gate::authorize('update', $this->draftLog());
-
-        if (! array_key_exists($index, $this->blocks) || $this->isSummaryBlock($this->blocks[$index])) {
-            return;
-        }
-
-        unset($this->blocks[$index]);
-
-        $this->blocks = array_values($this->blocks);
-
-        $this->autosaveDraft();
-    }
-
-    public function selectContactSuggestion(string $name): void
-    {
-        $this->contactPersonName = $name;
-
-        $this->autosaveDraft();
-    }
-
-    public function submit(): void
-    {
-        $log = $this->draftLog();
-
-        Gate::authorize('update', $log);
-
-        $this->ensureSummaryBlock();
-        $this->validateLog();
-        $contact = $this->rememberContact();
-
-        $log->fill([
-            'communication_type_id' => $this->communicationTypeId,
-            'customer_contact_id' => $contact?->id,
-            'contact_person_name' => $this->normalizedContactPersonName(),
-            'contact_at' => Carbon::parse($this->contactAt),
-            'status' => CustomerCommunicationLog::STATUS_SUBMITTED,
-            'submitted_at' => now(),
-            'last_autosaved_at' => now(),
-        ])->save();
-
-        $this->syncBlocks($log);
-
-        session()->flash('status', __('Communication logged.'));
-
-        $this->loadOrCreateDraft();
-    }
-
-    /**
-     * @return Collection<int, CommunicationType>
-     */
     #[Computed]
-    public function communicationTypes(): Collection
+    public function communicationLogs(): LengthAwarePaginator
     {
-        return CommunicationType::query()
-            ->active()
-            ->orderBy('sort_order')
-            ->orderBy('name')
-            ->get();
-    }
-
-    /**
-     * @return Collection<int, CommunicationBlockType>
-     */
-    #[Computed]
-    public function blockTypes(): Collection
-    {
-        return CommunicationBlockType::query()
-            ->active()
-            ->orderBy('sort_order')
-            ->orderBy('name')
-            ->get();
-    }
-
-    /**
-     * @return array<int, string>
-     */
-    #[Computed]
-    public function contactSuggestions(): array
-    {
-        return CustomerContact::query()
+        return CustomerCommunicationLog::query()
+            ->with(['communicationType', 'user', 'blocks.blockType'])
             ->where('netsuite_customer_id', $this->customerId())
-            ->orderByDesc('last_used_at')
-            ->orderBy('name')
-            ->limit(8)
-            ->pluck('name')
-            ->all();
+            ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
+            ->orderByDesc('contact_at')
+            ->paginate(perPage: 10, pageName: self::COMMUNICATION_LOGS_PAGE);
+    }
+
+    #[On('communication-log-saved')]
+    public function communicationLogSaved(): void
+    {
+        $this->resetPage(self::COMMUNICATION_LOGS_PAGE);
     }
 
     public function customerName(): string
@@ -184,17 +70,35 @@ new class extends Component {
         return (string) (data_get($this->customer, 'cadence_name') ?: __('Not set'));
     }
 
-    /**
-     * @param  array{id: string|null, communication_block_type_id: string|null, body: string}  $block
-     */
-    public function isSummaryBlock(array $block): bool
+    public function contactAtLabel(CustomerCommunicationLog $log): string
     {
-        return $block['communication_block_type_id'] === $this->summaryBlockType()->id;
+        return $log->contact_at instanceof CarbonInterface
+            ? $log->contact_at->format('M j, Y g:i A')
+            : __('N/A');
     }
 
-    public function blockTypeName(?string $blockTypeId): string
+    public function communicationTypeBadgeColor(CustomerCommunicationLog $log): string
     {
-        return (string) ($this->blockTypes->firstWhere('id', $blockTypeId)?->name ?? __('Note'));
+        return match ($log->communicationType?->slug) {
+            'phone' => 'green',
+            'email' => 'blue',
+            'text' => 'sky',
+            'visit' => 'amber',
+            default => 'zinc',
+        };
+    }
+
+    public function summaryFor(CustomerCommunicationLog $log): string
+    {
+        $summary = $log->blocks
+            ->first(fn ($block): bool => $block->blockType?->slug === CommunicationBlockType::SUMMARY)
+            ?->body;
+
+        if (! is_string($summary) || trim($summary) === '') {
+            return __('No summary');
+        }
+
+        return Str::limit(trim($summary), 180);
     }
 
     public function render()
@@ -208,271 +112,19 @@ new class extends Component {
     private function userCanAccessCustomer(array $customer): bool
     {
         $netsuiteUserId = Auth::user()?->netsuite_user_id;
-        $salesRepId = data_get($customer, 'sales_rep_id');
 
-        return $netsuiteUserId !== null
-            && $salesRepId !== null
-            && (int) $netsuiteUserId === (int) $salesRepId;
-    }
-
-    private function loadOrCreateDraft(): void
-    {
-        $log = CustomerCommunicationLog::query()
-            ->with(['blocks.blockType'])
-            ->where('user_id', Auth::id())
-            ->where('customer_account_number', $this->accountNumber)
-            ->where('status', CustomerCommunicationLog::STATUS_DRAFT)
-            ->latest('updated_at')
-            ->first();
-
-        if (! $log) {
-            $log = $this->createDraft();
+        if ($netsuiteUserId === null) {
+            return false;
         }
 
-        Gate::authorize('update', $log);
-
-        $this->fillFromLog($log->load(['blocks.blockType']));
-    }
-
-    private function createDraft(): CustomerCommunicationLog
-    {
-        $log = CustomerCommunicationLog::query()->create([
-            'user_id' => Auth::id(),
-            'netsuite_customer_id' => $this->customerId(),
-            'customer_account_number' => $this->accountNumber,
-            'customer_name' => $this->customerName(),
-            'netsuite_sales_rep_id' => (int) data_get($this->customer, 'sales_rep_id'),
-            'communication_type_id' => $this->defaultCommunicationType()->id,
-            'contact_at' => now(),
-            'status' => CustomerCommunicationLog::STATUS_DRAFT,
-            'last_autosaved_at' => now(),
-        ]);
-
-        $log->blocks()->create([
-            'communication_block_type_id' => $this->summaryBlockType()->id,
-            'position' => 0,
-            'body' => '',
-        ]);
-
-        return $log;
-    }
-
-    private function fillFromLog(CustomerCommunicationLog $log): void
-    {
-        $this->draftId = $log->id;
-        $this->contactAt = ($log->contact_at ?? now())->format('Y-m-d\TH:i');
-        $this->communicationTypeId = $log->communication_type_id;
-        $this->contactPersonName = (string) $log->contact_person_name;
-        $this->lastAutosavedAt = $log->last_autosaved_at?->format('g:i A');
-        $this->blocks = $log->blocks
-            ->sortBy('position')
-            ->values()
-            ->map(fn (CustomerCommunicationLogBlock $block): array => [
-                'id' => $block->id,
-                'communication_block_type_id' => $block->communication_block_type_id,
-                'body' => (string) $block->body,
-            ])
-            ->all();
-
-        $this->ensureSummaryBlock();
-    }
-
-    private function autosaveDraft(): void
-    {
-        if ($this->draftId === null) {
-            return;
-        }
-
-        $log = $this->draftLog();
-
-        Gate::authorize('update', $log);
-
-        $attributes = [
-            'communication_type_id' => $this->communicationTypeId ?: $this->defaultCommunicationType()->id,
-            'contact_person_name' => $this->normalizedContactPersonName(),
-            'last_autosaved_at' => now(),
-        ];
-
-        if ($contactAt = $this->parsedContactAt()) {
-            $attributes['contact_at'] = $contactAt;
-        }
-
-        $log->fill($attributes)->save();
-        $this->syncBlocks($log);
-
-        $this->lastAutosavedAt = now()->format('g:i A');
-    }
-
-    private function draftLog(): CustomerCommunicationLog
-    {
-        return CustomerCommunicationLog::query()
-            ->where('user_id', Auth::id())
-            ->where('status', CustomerCommunicationLog::STATUS_DRAFT)
-            ->findOrFail($this->draftId);
-    }
-
-    private function syncBlocks(CustomerCommunicationLog $log): void
-    {
-        $this->ensureSummaryBlock();
-
-        $keptBlockIds = [];
-
-        foreach (array_values($this->blocks) as $position => $block) {
-            $blockTypeId = $block['communication_block_type_id'];
-
-            if ($blockTypeId === null) {
-                continue;
-            }
-
-            $record = null;
-
-            if ($block['id'] !== null) {
-                $record = $log->blocks()->find($block['id']);
-            }
-
-            $record ??= new CustomerCommunicationLogBlock([
-                'customer_communication_log_id' => $log->id,
-            ]);
-
-            $record->fill([
-                'communication_block_type_id' => $blockTypeId,
-                'position' => $position,
-                'body' => $block['body'],
-            ])->save();
-
-            $this->blocks[$position]['id'] = $record->id;
-            $keptBlockIds[] = $record->id;
-        }
-
-        $log->blocks()
-            ->when($keptBlockIds !== [], fn ($query) => $query->whereNotIn('id', $keptBlockIds))
-            ->delete();
-    }
-
-    private function validateLog(): void
-    {
-        $this->validate([
-            'contactAt' => ['required', 'date'],
-            'communicationTypeId' => ['required', Rule::exists('communication_types', 'id')->where('is_active', true)],
-            'contactPersonName' => ['nullable', 'string', 'max:255'],
-            'blocks' => ['required', 'array', 'min:1'],
-            'blocks.*.communication_block_type_id' => ['required', Rule::exists('communication_block_types', 'id')->where('is_active', true)],
-            'blocks.*.body' => ['nullable', 'string', 'max:10000'],
-        ]);
-
-        $summaryIndex = $this->summaryBlockIndex();
-
-        if ($summaryIndex === null || trim((string) ($this->blocks[$summaryIndex]['body'] ?? '')) === '') {
-            throw ValidationException::withMessages([
-                'blocks.'.($summaryIndex ?? 0).'.body' => __('A summary is required.'),
-            ]);
-        }
-    }
-
-    private function rememberContact(): ?CustomerContact
-    {
-        $name = $this->normalizedContactPersonName();
-
-        if ($name === null) {
-            return null;
-        }
-
-        $contact = CustomerContact::query()
-            ->withTrashed()
-            ->firstOrNew([
-                'netsuite_customer_id' => $this->customerId(),
-                'normalized_name' => CustomerContact::normalizeName($name),
-            ]);
-
-        $contact->fill([
-            'customer_account_number' => $this->accountNumber,
-            'name' => $name,
-            'last_used_at' => now(),
-        ])->save();
-
-        if ($contact->trashed()) {
-            $contact->restore();
-        }
-
-        return $contact;
-    }
-
-    private function ensureSummaryBlock(): void
-    {
-        if ($this->summaryBlockIndex() !== null) {
-            return;
-        }
-
-        array_unshift($this->blocks, [
-            'id' => null,
-            'communication_block_type_id' => $this->summaryBlockType()->id,
-            'body' => '',
-        ]);
-    }
-
-    private function summaryBlockIndex(): ?int
-    {
-        $summaryTypeId = $this->summaryBlockType()->id;
-
-        foreach ($this->blocks as $index => $block) {
-            if (($block['communication_block_type_id'] ?? null) === $summaryTypeId) {
-                return $index;
-            }
-        }
-
-        return null;
-    }
-
-    private function defaultCommunicationType(): CommunicationType
-    {
-        $type = CommunicationType::query()
-            ->active()
-            ->where('slug', CommunicationType::PHONE)
-            ->first()
-            ?? CommunicationType::query()->active()->orderBy('sort_order')->first();
-
-        abort_unless($type !== null, 500, __('Communication types have not been configured.'));
-
-        return $type;
-    }
-
-    private function summaryBlockType(): CommunicationBlockType
-    {
-        $type = CommunicationBlockType::query()
-            ->active()
-            ->where('slug', CommunicationBlockType::SUMMARY)
-            ->first();
-
-        abort_unless($type !== null, 500, __('Communication block types have not been configured.'));
-
-        return $type;
-    }
-
-    private function defaultAdditionalBlockType(): ?CommunicationBlockType
-    {
-        return $this->blockTypes->firstWhere('slug', '!=', CommunicationBlockType::SUMMARY)
-            ?? $this->blockTypes->first();
+        return collect(['sales_rep_id', 'pipeline_owner_id'])
+            ->contains(fn (string $key): bool => data_get($customer, $key) !== null
+                && (int) data_get($customer, $key) === (int) $netsuiteUserId);
     }
 
     private function customerId(): int
     {
         return (int) data_get($this->customer, 'customer_id');
-    }
-
-    private function normalizedContactPersonName(): ?string
-    {
-        $name = Str::of($this->contactPersonName)->squish()->toString();
-
-        return $name === '' ? null : $name;
-    }
-
-    private function parsedContactAt(): ?Carbon
-    {
-        try {
-            return Carbon::parse($this->contactAt);
-        } catch (Throwable) {
-            return null;
-        }
     }
 };
 ?>
@@ -487,98 +139,74 @@ new class extends Component {
                 <flux:badge size="sm" color="emerald">{{ $this->cadenceName() }}</flux:badge>
             </div>
         </div>
-
-        @if ($lastAutosavedAt)
-            <flux:text>{{ __('Draft saved :time', ['time' => $lastAutosavedAt]) }}</flux:text>
-        @endif
     </div>
 
-    @if (session('status'))
-        <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900 dark:border-emerald-700/60 dark:bg-emerald-950/40 dark:text-emerald-100">
-            {{ session('status') }}
-        </div>
-    @endif
-
     <div class="grid gap-6 lg:grid-cols-3">
-        <form wire:submit="submit" class="lg:col-span-2">
-            <flux:card class="space-y-6">
-                <div class="grid gap-4 md:grid-cols-2">
-                    <flux:input
-                        wire:model.live.debounce.750ms="contactAt"
-                        :label="__('Contact date and time')"
-                        type="datetime-local"
-                        required
-                    />
+        <section class="space-y-4 lg:col-span-2">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <flux:heading size="lg">{{ __('Communication Logs') }}</flux:heading>
+                    <flux:text>{{ trans_choice(':count log|:count logs', $this->communicationLogs->total(), ['count' => $this->communicationLogs->total()]) }}</flux:text>
+                </div>
 
-                    <flux:select wire:model.live="communicationTypeId" :label="__('Communication type')" required>
-                        @foreach ($this->communicationTypes as $type)
-                            <flux:select.option value="{{ $type->id }}">{{ $type->name }}</flux:select.option>
+                <livewire:customer-communication-log-flyout
+                    :customer="$customer"
+                    :account-number="$accountNumber"
+                    trigger-label="Add new log"
+                    trigger-icon="plus"
+                    trigger-size="sm"
+                    trigger-variant="primary"
+                    :key="'customer-log-flyout-'.$accountNumber"
+                />
+            </div>
+
+            @if ($this->communicationLogs->total() === 0)
+                <div class="rounded-lg border border-neutral-200 p-6 text-sm text-neutral-600 dark:border-neutral-700 dark:text-neutral-300">
+                    {{ __('No communication logs yet.') }}
+                </div>
+            @else
+                <flux:table
+                    id="communication-logs"
+                    :paginate="$this->communicationLogs"
+                    pagination:scroll-to="#communication-logs"
+                    container:class="max-h-[36rem]"
+                >
+                    <flux:table.columns sticky>
+                        <flux:table.column>{{ __('Time') }}</flux:table.column>
+                        <flux:table.column>{{ __('Type') }}</flux:table.column>
+                        <flux:table.column>{{ __('Summary') }}</flux:table.column>
+                        <flux:table.column>{{ __('Person') }}</flux:table.column>
+                        <flux:table.column>{{ __('User') }}</flux:table.column>
+                    </flux:table.columns>
+
+                    <flux:table.rows>
+                        @foreach ($this->communicationLogs as $log)
+                            <flux:table.row :key="'communication-log-'.$log->id">
+                                <flux:table.cell class="whitespace-nowrap">
+                                    {{ $this->contactAtLabel($log) }}
+                                </flux:table.cell>
+                                <flux:table.cell>
+                                    <flux:badge size="sm" inset="top bottom" color="{{ $this->communicationTypeBadgeColor($log) }}">
+                                        {{ $log->communicationType?->name ?? __('Unknown') }}
+                                    </flux:badge>
+                                </flux:table.cell>
+                                <flux:table.cell>
+                                    {{ $this->summaryFor($log) }}
+                                </flux:table.cell>
+                                <flux:table.cell>
+                                    {{ $log->contact_person_name ?: __('N/A') }}
+                                </flux:table.cell>
+                                <flux:table.cell>
+                                    <flux:badge size="sm" inset="top bottom" color="zinc">
+                                        {{ $log->user?->name ?? __('Unknown') }}
+                                    </flux:badge>
+                                </flux:table.cell>
+                            </flux:table.row>
                         @endforeach
-                    </flux:select>
-                </div>
-
-                <div class="space-y-2">
-                    <flux:input
-                        wire:model.live.debounce.750ms="contactPersonName"
-                        :label="__('Contact person')"
-                        type="text"
-                        autocomplete="off"
-                    />
-
-                    @if ($this->contactSuggestions !== [])
-                        <div class="flex flex-wrap gap-2">
-                            @foreach ($this->contactSuggestions as $suggestion)
-                                <flux:button size="xs" type="button" wire:click="selectContactSuggestion(@js($suggestion))" class="whitespace-nowrap">
-                                    {{ $suggestion }}
-                                </flux:button>
-                            @endforeach
-                        </div>
-                    @endif
-                </div>
-
-                <div class="space-y-4">
-                    <div class="flex items-center justify-between gap-3">
-                        <flux:heading size="md">{{ __('Notes') }}</flux:heading>
-                        <flux:button.group>
-                            <flux:button size="sm" type="button" wire:click="addBlock" icon="plus">{{ __('Add') }}</flux:button>
-                            <flux:button size="sm" type="button" icon="sparkles" disabled>{{ __('Summary') }}</flux:button>
-                        </flux:button.group>
-                    </div>
-
-                    @foreach ($blocks as $index => $block)
-                        <div wire:key="communication-block-{{ $index }}-{{ $block['id'] ?? 'new' }}" class="space-y-3 rounded-lg border border-zinc-200 p-4 dark:border-white/10">
-                            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                @if ($this->isSummaryBlock($block))
-                                    <flux:badge color="blue">{{ $this->blockTypeName($block['communication_block_type_id']) }}</flux:badge>
-                                @else
-                                    <flux:select wire:model.live="blocks.{{ $index }}.communication_block_type_id" size="sm" class="sm:max-w-56" :aria-label="__('Note type')">
-                                        @foreach ($this->blockTypes as $type)
-                                            @if ($type->slug !== \App\Models\CommunicationBlockType::SUMMARY)
-                                                <flux:select.option value="{{ $type->id }}">{{ $type->name }}</flux:select.option>
-                                            @endif
-                                        @endforeach
-                                    </flux:select>
-
-                                    <flux:button size="sm" type="button" variant="ghost" icon="trash" wire:click="removeBlock({{ $index }})" :aria-label="__('Remove note')" />
-                                @endif
-                            </div>
-
-                            <flux:textarea
-                                wire:model.live.debounce.1000ms="blocks.{{ $index }}.body"
-                                rows="{{ $this->isSummaryBlock($block) ? 5 : 4 }}"
-                                :label="$this->isSummaryBlock($block) ? __('Summary') : $this->blockTypeName($block['communication_block_type_id'])"
-                            />
-                        </div>
-                    @endforeach
-                </div>
-
-                <div class="flex justify-end">
-                    <flux:button type="submit" variant="primary" icon="check">
-                        {{ __('Submit log') }}
-                    </flux:button>
-                </div>
-            </flux:card>
-        </form>
+                    </flux:table.rows>
+                </flux:table>
+            @endif
+        </section>
 
         <aside class="space-y-4">
             <flux:card class="space-y-4">

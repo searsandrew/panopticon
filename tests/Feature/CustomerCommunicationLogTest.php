@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\CommunicationBlockType;
+use App\Models\CommunicationType;
 use App\Models\CustomerCommunicationLog;
 use App\Models\CustomerContact;
 use App\Models\User;
@@ -29,9 +30,9 @@ function configureBriarRoseForCustomerLogTests(): void
 /**
  * @param  array<string, mixed>  $overrides
  */
-function fakeCustomerAccountLookup(array $overrides = [], int $times = 1): void
+function customerLogPayload(array $overrides = []): array
 {
-    $customer = array_merge([
+    return array_merge([
         'id' => '2462',
         'customer_id' => '2462',
         'account_number' => 'A-0999',
@@ -47,6 +48,14 @@ function fakeCustomerAccountLookup(array $overrides = [], int $times = 1): void
         'cadence_name' => 'Quarterly',
         'cadence_scriptid' => '_P3M',
     ], $overrides);
+}
+
+/**
+ * @param  array<string, mixed>  $overrides
+ */
+function fakeCustomerAccountLookup(array $overrides = [], int $times = 1): void
+{
+    $customer = customerLogPayload($overrides);
 
     $sequence = Http::sequence();
 
@@ -70,7 +79,7 @@ function permittedSalesRep(TestCase $testCase, array $attributes = []): User
     return $user->refresh();
 }
 
-test('customers are opened by account number and start a private draft', function () {
+test('customers are opened by account number and show the communication log table', function () {
     configureBriarRoseForCustomerLogTests();
     fakeCustomerAccountLookup();
 
@@ -82,11 +91,33 @@ test('customers are opened by account number and start a private draft', functio
         ->assertOk()
         ->assertSee('Andrew Apples')
         ->assertSee('A-0999')
-        ->assertSee('Contact date and time')
-        ->assertSee('Communication type')
-        ->assertSee('Summary')
+        ->assertSee('Communication Logs')
+        ->assertSee('No communication logs yet.')
+        ->assertSee('Add new log')
         ->assertSee('Signals')
         ->assertSee('data-flux-card', false);
+
+    expect(CustomerCommunicationLog::query()->count())->toBe(0);
+
+    Http::assertSent(fn (Request $request): bool => str_contains((string) ($request->data()['q'] ?? ''), "c.custentity3 = 'A-0999'"));
+});
+
+test('the reusable flyout starts a private draft when opened', function () {
+    configureBriarRoseForCustomerLogTests();
+
+    $user = permittedSalesRep($this);
+
+    $this->actingAs($user);
+
+    Livewire::test('customer-communication-log-flyout', [
+        'customer' => customerLogPayload(),
+        'accountNumber' => 'A-0999',
+    ])
+        ->call('open')
+        ->assertSet('showLogFlyout', true)
+        ->assertSee('Contact date and time')
+        ->assertSee('Communication type')
+        ->assertSee('Summary');
 
     $draft = CustomerCommunicationLog::query()->sole();
 
@@ -95,8 +126,6 @@ test('customers are opened by account number and start a private draft', functio
         ->and($draft->customer_account_number)->toBe('A-0999')
         ->and($draft->netsuite_customer_id)->toBe(2462)
         ->and($draft->blocks)->toHaveCount(1);
-
-    Http::assertSent(fn (Request $request): bool => str_contains((string) ($request->data()['q'] ?? ''), "c.custentity3 = 'A-0999'"));
 });
 
 test('summary is required before a communication log can be submitted', function () {
@@ -107,7 +136,11 @@ test('summary is required before a communication log can be submitted', function
 
     $this->actingAs($user);
 
-    Livewire::test('pages::customers.show', ['accountNumber' => 'A-0999'])
+    Livewire::test('customer-communication-log-flyout', [
+        'customer' => customerLogPayload(),
+        'accountNumber' => 'A-0999',
+    ])
+        ->call('open')
         ->set('blocks.0.body', '')
         ->call('submit')
         ->assertHasErrors(['blocks.0.body']);
@@ -138,7 +171,11 @@ test('submitted logs save blocks contacts and audit history', function () {
 
     $this->actingAs($user);
 
-    Livewire::test('pages::customers.show', ['accountNumber' => 'A-0999'])
+    Livewire::test('customer-communication-log-flyout', [
+        'customer' => customerLogPayload(),
+        'accountNumber' => 'A-0999',
+    ])
+        ->call('open')
         ->assertSee('Jordan Buyer')
         ->assertDontSee('Hidden Contact')
         ->set('contactPersonName', 'Alex Buyer')
@@ -148,7 +185,7 @@ test('submitted logs save blocks contacts and audit history', function () {
         ->set('blocks.1.body', 'Send the new product sample.')
         ->call('submit')
         ->assertHasNoErrors()
-        ->assertSee('Communication logged.');
+        ->assertDispatched('communication-log-saved');
 
     $submitted = CustomerCommunicationLog::query()
         ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
@@ -160,8 +197,46 @@ test('submitted logs save blocks contacts and audit history', function () {
         ->and($submitted->user_id)->toBe($user->id)
         ->and($submitted->blocks()->count())->toBe(2)
         ->and(CustomerContact::query()->where('netsuite_customer_id', 2462)->where('name', 'Alex Buyer')->exists())->toBeTrue()
-        ->and(CustomerCommunicationLog::query()->where('status', CustomerCommunicationLog::STATUS_DRAFT)->count())->toBe(1)
+        ->and(CustomerCommunicationLog::query()->where('status', CustomerCommunicationLog::STATUS_DRAFT)->count())->toBe(0)
         ->and(DB::table('audits')->where('auditable_type', CustomerCommunicationLog::class)->exists())->toBeTrue();
+});
+
+test('the customer page lists submitted logs with summary time person user and type', function () {
+    configureBriarRoseForCustomerLogTests();
+    fakeCustomerAccountLookup();
+
+    $user = permittedSalesRep($this);
+    $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
+    $summaryType = CommunicationBlockType::query()->where('slug', CommunicationBlockType::SUMMARY)->sole();
+
+    $log = CustomerCommunicationLog::factory()
+        ->submitted()
+        ->for($user)
+        ->for($type, 'communicationType')
+        ->create([
+            'netsuite_customer_id' => 2462,
+            'customer_account_number' => 'A-0999',
+            'contact_person_name' => 'Alex Buyer',
+            'contact_at' => '2026-05-28 10:30:00',
+        ]);
+
+    $log->blocks()->create([
+        'communication_block_type_id' => $summaryType->id,
+        'position' => 0,
+        'body' => 'Reviewed open opportunities and confirmed follow up timing.',
+    ]);
+
+    $response = $this->actingAs($user)->get(route('customers.show', ['accountNumber' => 'A-0999']));
+
+    $response
+        ->assertOk()
+        ->assertSee('Communication Logs')
+        ->assertSee('Reviewed open opportunities and confirmed follow up timing.')
+        ->assertSee('May 28, 2026 10:30 AM')
+        ->assertSee('Alex Buyer')
+        ->assertSee($user->name)
+        ->assertSee('Phone')
+        ->assertSee('data-flux-table', false);
 });
 
 test('customer access is limited to the users linked NetSuite sales rep id', function () {
@@ -189,12 +264,20 @@ test('drafts are private to the app user even when users share a NetSuite id', f
 
     $this->actingAs($firstUser);
 
-    Livewire::test('pages::customers.show', ['accountNumber' => 'A-0999'])
+    Livewire::test('customer-communication-log-flyout', [
+        'customer' => customerLogPayload(),
+        'accountNumber' => 'A-0999',
+    ])
+        ->call('open')
         ->set('blocks.0.body', 'First private draft.');
 
     $this->actingAs($secondUser);
 
-    Livewire::test('pages::customers.show', ['accountNumber' => 'A-0999'])
+    Livewire::test('customer-communication-log-flyout', [
+        'customer' => customerLogPayload(),
+        'accountNumber' => 'A-0999',
+    ])
+        ->call('open')
         ->assertSet('blocks.0.body', '');
 
     expect(CustomerCommunicationLog::query()->where('status', CustomerCommunicationLog::STATUS_DRAFT)->count())->toBe(2)

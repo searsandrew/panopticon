@@ -355,10 +355,18 @@ new #[Title('Dashboard')] class extends Component {
                                 </div>
                                 <div>
                                     <div class="text-xs font-medium uppercase text-neutral-500 dark:text-neutral-400">{{ __('Log') }}</div>
-                                    <flux:button.group class="mt-1">
-                                        <flux:button size="sm" icon="chat-bubble-left-ellipsis" type="button">{{ __('Log') }}</flux:button>
-                                        <flux:button size="sm" icon="plus" type="button" :aria-label="__('Add log entry')" />
-                                    </flux:button.group>
+                                    <div class="mt-1">
+                                        <livewire:customer-communication-log-flyout
+                                            :customer="$customer"
+                                            :account-number="(string) (data_get($customer, 'account_number') ?: data_get($customer, 'customer_id'))"
+                                            trigger-label="Log"
+                                            trigger-icon="chat-bubble-left-ellipsis"
+                                            trigger-size="sm"
+                                            trigger-variant=""
+                                            :split-trigger="true"
+                                            :key="'pipeline-log-flyout-'.data_get($customer, 'customer_id')"
+                                        />
+                                    </div>
                                 </div>
                             </div>
                         </flux:card>

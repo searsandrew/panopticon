@@ -3,6 +3,7 @@
 use App\Models\CommunicationType;
 use App\Models\CustomerCommunicationLog;
 use App\Models\User;
+use Database\Seeders\CommunicationLoggingSeeder;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -94,6 +95,8 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
     ]);
 
     $user = User::factory()->create();
+    $this->seed(CommunicationLoggingSeeder::class);
+
     $this->actingAs($user);
 
     $response = $this->get(route('dashboard'));
