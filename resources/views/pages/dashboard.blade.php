@@ -1,25 +1,81 @@
 <?php
 
 use App\Services\NetSuite\NetSuiteCustomerRepository;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
 use Livewire\Component;
+use Livewire\WithPagination;
 
 new #[Title('Dashboard')] class extends Component {
+    use WithPagination;
+
+    private const ACTIVE_CUSTOMERS_PAGE = 'active-customers-page';
+
+    /**
+     * @var array<int, array<string, mixed>>
+     */
+    public array $activeCustomerRows = [];
+
+    /**
+     * @var array<int, array<string, mixed>>
+     */
+    public array $pipelineCustomerRows = [];
+
+    public string $activeCustomerSortColumn = 'customer';
+
+    public string $activeCustomerSortDirection = 'asc';
+
+    public int $activeCustomersPerPage = 10;
+
+    public function mount(NetSuiteCustomerRepository $customers): void
+    {
+        $salesRepId = $this->salesRepId();
+
+        if ($salesRepId === null) {
+            return;
+        }
+
+        $this->pipelineCustomerRows = $customers->pipelineForSalesRep($salesRepId);
+        $this->activeCustomerRows = $customers->activeForSalesRep($salesRepId);
+    }
+
     /**
      * @return array<int, array<string, mixed>>
      */
     #[Computed]
     public function activeCustomers(): array
     {
-        $salesRepId = $this->salesRepId();
+        return $this->activeCustomerRows;
+    }
 
-        if ($salesRepId === null) {
-            return [];
-        }
+    #[Computed]
+    public function paginatedActiveCustomers(): LengthAwarePaginator
+    {
+        $customers = collect($this->activeCustomers)
+            ->sortBy(
+                fn (array $customer): string => $this->activeCustomerSortValue($customer, $this->activeCustomerSortColumn),
+                SORT_NATURAL | SORT_FLAG_CASE,
+                $this->activeCustomerSortDirection === 'desc',
+            )
+            ->values();
 
-        return app(NetSuiteCustomerRepository::class)->activeForSalesRep($salesRepId);
+        $page = $this->getPage(self::ACTIVE_CUSTOMERS_PAGE);
+        $items = $customers
+            ->slice(($page - 1) * $this->activeCustomersPerPage, $this->activeCustomersPerPage)
+            ->values();
+
+        return new LengthAwarePaginator(
+            $items,
+            $customers->count(),
+            $this->activeCustomersPerPage,
+            $page,
+            [
+                'pageName' => self::ACTIVE_CUSTOMERS_PAGE,
+                'path' => request()->url(),
+            ],
+        );
     }
 
     /**
@@ -28,13 +84,23 @@ new #[Title('Dashboard')] class extends Component {
     #[Computed]
     public function pipelineCustomers(): array
     {
-        $salesRepId = $this->salesRepId();
+        return $this->pipelineCustomerRows;
+    }
 
-        if ($salesRepId === null) {
-            return [];
+    public function sortActiveCustomers(string $column): void
+    {
+        if (! in_array($column, ['customer', 'email', 'phone', 'cadence', 'duration'], true)) {
+            return;
         }
 
-        return app(NetSuiteCustomerRepository::class)->pipelineForSalesRep($salesRepId);
+        if ($this->activeCustomerSortColumn === $column) {
+            $this->activeCustomerSortDirection = $this->activeCustomerSortDirection === 'asc' ? 'desc' : 'asc';
+        } else {
+            $this->activeCustomerSortColumn = $column;
+            $this->activeCustomerSortDirection = 'asc';
+        }
+
+        $this->resetPage(self::ACTIVE_CUSTOMERS_PAGE);
     }
 
     #[Computed]
@@ -48,6 +114,20 @@ new #[Title('Dashboard')] class extends Component {
         $netsuiteUserId = Auth::user()?->netsuite_user_id;
 
         return is_int($netsuiteUserId) ? $netsuiteUserId : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $customer
+     */
+    private function activeCustomerSortValue(array $customer, string $column): string
+    {
+        return match ($column) {
+            'email' => (string) (data_get($customer, 'email') ?: ''),
+            'phone' => (string) (data_get($customer, 'phone') ?: ''),
+            'cadence' => (string) (data_get($customer, 'cadence_name') ?: ''),
+            'duration' => (string) (data_get($customer, 'cadence_iso8601') ?: ''),
+            default => (string) (data_get($customer, 'companyname') ?: data_get($customer, 'entityid') ?: ''),
+        };
     }
 };
 ?>
@@ -76,29 +156,30 @@ new #[Title('Dashboard')] class extends Component {
             @else
                 <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                     @foreach ($this->pipelineCustomers as $customer)
-                        <article wire:key="pipeline-customer-{{ data_get($customer, 'customer_id') }}" class="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-700 dark:bg-neutral-950">
-                            <div class="flex flex-col gap-3">
-                                <div>
-                                    <flux:heading size="md">{{ data_get($customer, 'companyname') ?: data_get($customer, 'entityid') }}</flux:heading>
-                                    <flux:text>{{ data_get($customer, 'email') ?: __('No email on file') }}</flux:text>
-                                </div>
+                        <flux:card wire:key="pipeline-customer-{{ data_get($customer, 'customer_id') }}" class="space-y-4">
+                            <div>
+                                <flux:heading size="md">{{ data_get($customer, 'companyname') ?: data_get($customer, 'entityid') }}</flux:heading>
+                                <flux:text>{{ data_get($customer, 'email') ?: __('No email on file') }}</flux:text>
+                            </div>
 
-                                <div class="grid gap-3 text-sm sm:grid-cols-3">
-                                    <div>
-                                        <div class="text-xs font-medium uppercase text-neutral-500 dark:text-neutral-400">{{ __('Phone') }}</div>
-                                        <div class="mt-1 text-neutral-900 dark:text-neutral-100">{{ data_get($customer, 'phone') ?: __('N/A') }}</div>
-                                    </div>
-                                    <div>
-                                        <div class="text-xs font-medium uppercase text-neutral-500 dark:text-neutral-400">{{ __('Cadence') }}</div>
-                                        <div class="mt-1 text-neutral-900 dark:text-neutral-100">{{ data_get($customer, 'cadence_name') ?: __('Not set') }}</div>
-                                    </div>
-                                    <div>
-                                        <div class="text-xs font-medium uppercase text-neutral-500 dark:text-neutral-400">{{ __('Duration') }}</div>
-                                        <div class="mt-1 font-mono text-xs text-neutral-900 dark:text-neutral-100">{{ data_get($customer, 'cadence_iso8601') ?: __('N/A') }}</div>
-                                    </div>
+                            <div class="grid gap-3 text-sm sm:grid-cols-3">
+                                <div>
+                                    <div class="text-xs font-medium uppercase text-neutral-500 dark:text-neutral-400">{{ __('Phone') }}</div>
+                                    <div class="mt-1 text-neutral-900 dark:text-neutral-100">{{ data_get($customer, 'phone') ?: __('N/A') }}</div>
+                                </div>
+                                <div>
+                                    <div class="text-xs font-medium uppercase text-neutral-500 dark:text-neutral-400">{{ __('Cadence') }}</div>
+                                    <div class="mt-1 text-neutral-900 dark:text-neutral-100">{{ data_get($customer, 'cadence_name') ?: __('Not set') }}</div>
+                                </div>
+                                <div>
+                                    <div class="text-xs font-medium uppercase text-neutral-500 dark:text-neutral-400">{{ __('Log') }}</div>
+                                    <flux:button.group class="mt-1">
+                                        <flux:button size="sm" icon="chat-bubble-left-ellipsis" type="button">{{ __('Log') }}</flux:button>
+                                        <flux:button size="sm" icon="plus" type="button" :aria-label="__('Add log entry')" />
+                                    </flux:button.group>
                                 </div>
                             </div>
-                        </article>
+                        </flux:card>
                     @endforeach
                 </div>
             @endif
@@ -115,42 +196,89 @@ new #[Title('Dashboard')] class extends Component {
                     {{ __('No active customers are assigned to your NetSuite sales rep account yet.') }}
                 </div>
             @else
-                <div class="overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700">
-                    <div class="overflow-x-auto">
-                        <table class="min-w-full divide-y divide-neutral-200 text-sm dark:divide-neutral-700">
-                            <thead class="bg-neutral-50 text-left text-xs font-medium uppercase text-neutral-500 dark:bg-neutral-900 dark:text-neutral-400">
-                                <tr>
-                                    <th scope="col" class="px-4 py-3">{{ __('Customer') }}</th>
-                                    <th scope="col" class="px-4 py-3">{{ __('Email') }}</th>
-                                    <th scope="col" class="px-4 py-3">{{ __('Phone') }}</th>
-                                    <th scope="col" class="px-4 py-3">{{ __('Cadence') }}</th>
-                                    <th scope="col" class="px-4 py-3">{{ __('Duration') }}</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-neutral-200 bg-white dark:divide-neutral-800 dark:bg-neutral-950">
-                                @foreach ($this->activeCustomers as $customer)
-                                    <tr wire:key="active-customer-{{ data_get($customer, 'customer_id') }}">
-                                        <td class="px-4 py-3 font-medium text-neutral-900 dark:text-neutral-100">
-                                            {{ data_get($customer, 'companyname') ?: data_get($customer, 'entityid') }}
-                                        </td>
-                                        <td class="px-4 py-3 text-neutral-600 dark:text-neutral-300">
-                                            {{ data_get($customer, 'email') ?: __('N/A') }}
-                                        </td>
-                                        <td class="px-4 py-3 text-neutral-600 dark:text-neutral-300">
-                                            {{ data_get($customer, 'phone') ?: __('N/A') }}
-                                        </td>
-                                        <td class="px-4 py-3 text-neutral-600 dark:text-neutral-300">
-                                            {{ data_get($customer, 'cadence_name') ?: __('Not set') }}
-                                        </td>
-                                        <td class="px-4 py-3 font-mono text-xs text-neutral-600 dark:text-neutral-300">
-                                            {{ data_get($customer, 'cadence_iso8601') ?: __('N/A') }}
-                                        </td>
-                                    </tr>
-                                @endforeach
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
+                <flux:table
+                    id="active-customers"
+                    :paginate="$this->paginatedActiveCustomers"
+                    pagination:scroll-to="#active-customers"
+                    container:class="max-h-[32rem]"
+                >
+                    <flux:table.columns sticky>
+                        <flux:table.column
+                            sortable
+                            :sorted="$this->activeCustomerSortColumn === 'customer'"
+                            :direction="$this->activeCustomerSortDirection"
+                            wire:click="sortActiveCustomers('customer')"
+                        >
+                            {{ __('Customer') }}
+                        </flux:table.column>
+                        <flux:table.column
+                            sortable
+                            :sorted="$this->activeCustomerSortColumn === 'email'"
+                            :direction="$this->activeCustomerSortDirection"
+                            wire:click="sortActiveCustomers('email')"
+                        >
+                            {{ __('Email') }}
+                        </flux:table.column>
+                        <flux:table.column
+                            sortable
+                            :sorted="$this->activeCustomerSortColumn === 'phone'"
+                            :direction="$this->activeCustomerSortDirection"
+                            wire:click="sortActiveCustomers('phone')"
+                        >
+                            {{ __('Phone') }}
+                        </flux:table.column>
+                        <flux:table.column
+                            sortable
+                            :sorted="$this->activeCustomerSortColumn === 'cadence'"
+                            :direction="$this->activeCustomerSortDirection"
+                            wire:click="sortActiveCustomers('cadence')"
+                        >
+                            {{ __('Cadence') }}
+                        </flux:table.column>
+                        <flux:table.column
+                            sortable
+                            :sorted="$this->activeCustomerSortColumn === 'duration'"
+                            :direction="$this->activeCustomerSortDirection"
+                            wire:click="sortActiveCustomers('duration')"
+                        >
+                            {{ __('Duration') }}
+                        </flux:table.column>
+                    </flux:table.columns>
+
+                    <flux:table.rows>
+                        @foreach ($this->paginatedActiveCustomers as $customer)
+                            @php($activeCustomerHref = route('customers.show', ['customer' => data_get($customer, 'customer_id')]))
+
+                            <flux:table.row :key="'active-customer-'.data_get($customer, 'customer_id')" class="group cursor-pointer hover:bg-zinc-50 dark:hover:bg-white/5">
+                                <flux:table.cell variant="strong">
+                                    <a href="{{ $activeCustomerHref }}" wire:navigate class="-m-3 block px-3 py-3">
+                                        {{ data_get($customer, 'companyname') ?: data_get($customer, 'entityid') }}
+                                    </a>
+                                </flux:table.cell>
+                                <flux:table.cell>
+                                    <a href="{{ $activeCustomerHref }}" wire:navigate class="-m-3 block px-3 py-3">
+                                        {{ data_get($customer, 'email') ?: __('N/A') }}
+                                    </a>
+                                </flux:table.cell>
+                                <flux:table.cell>
+                                    <a href="{{ $activeCustomerHref }}" wire:navigate class="-m-3 block px-3 py-3">
+                                        {{ data_get($customer, 'phone') ?: __('N/A') }}
+                                    </a>
+                                </flux:table.cell>
+                                <flux:table.cell>
+                                    <a href="{{ $activeCustomerHref }}" wire:navigate class="-m-3 block px-3 py-3">
+                                        {{ data_get($customer, 'cadence_name') ?: __('Not set') }}
+                                    </a>
+                                </flux:table.cell>
+                                <flux:table.cell class="font-mono text-xs">
+                                    <a href="{{ $activeCustomerHref }}" wire:navigate class="-m-3 block px-3 py-3">
+                                        {{ data_get($customer, 'cadence_iso8601') ?: __('N/A') }}
+                                    </a>
+                                </flux:table.cell>
+                            </flux:table.row>
+                        @endforeach
+                    </flux:table.rows>
+                </flux:table>
             @endif
         </section>
     @endif

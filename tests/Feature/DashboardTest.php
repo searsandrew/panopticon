@@ -3,6 +3,7 @@
 use App\Models\User;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Livewire\Livewire;
 use Searsandrew\BriarRose\BriarRoseManager;
 
 test('guests are redirected to the login page', function () {
@@ -93,11 +94,17 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
         ->assertSee('Acme Dental')
         ->assertSee('Bright Smiles')
         ->assertSee('Monthly')
-        ->assertSee('P1M')
         ->assertSee('Quarterly')
         ->assertSee('P3M')
         ->assertSee('Annually')
-        ->assertSee('P1Y');
+        ->assertSee('P1Y')
+        ->assertSee('data-flux-card', false)
+        ->assertSee('data-flux-table', false)
+        ->assertSee('sticky top-0 z-20', false)
+        ->assertSee('Log')
+        ->assertSee('Add log entry')
+        ->assertSee('href="'.route('customers.show', ['customer' => 2462]).'"', false)
+        ->assertSee('wire:navigate', false);
 
     $matchesPipelineCustomerQuery = function (Request $request, int $offset): bool {
         parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $queryParams);
@@ -133,6 +140,72 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
         fn (Request $request): bool => $matchesSalesRepCustomerQuery($request, 0),
         fn (Request $request): bool => $matchesSalesRepCustomerQuery($request, 1000),
     ]);
+});
+
+test('active customer table paginates and sorts without refetching NetSuite', function () {
+    config()->set('briar-rose.account', '1234567');
+    config()->set('briar-rose.consumer_key', 'consumer-key');
+    config()->set('briar-rose.consumer_secret', 'consumer-secret');
+    config()->set('briar-rose.token_id', 'token-id');
+    config()->set('briar-rose.token_secret', 'token-secret');
+    config()->set('briar-rose.rest_base_url', 'https://netsuite.test');
+    config()->set('briar-rose.rest.retries.enabled', false);
+
+    app()->forgetInstance(BriarRoseManager::class);
+
+    $activeCustomers = collect(range(1, 12))
+        ->map(fn (int $number): array => [
+            'id' => (string) (3000 + $number),
+            'customer_id' => (string) (3000 + $number),
+            'entityid' => sprintf('CUST-%02d', $number),
+            'companyname' => sprintf('Customer %02d', $number),
+            'email' => sprintf('customer%02d@example.test', $number),
+            'phone' => sprintf('555-01%02d', $number),
+            'sales_rep_id' => '2214',
+            'cadence_name' => 'Monthly',
+            'cadence_scriptid' => '_P1M',
+        ])
+        ->all();
+
+    Http::preventStrayRequests();
+    Http::fake([
+        '*' => Http::sequence()
+            ->push([
+                'items' => [],
+                'hasMore' => false,
+            ])
+            ->push([
+                'items' => $activeCustomers,
+                'hasMore' => false,
+            ]),
+    ]);
+
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    Livewire::test('pages::dashboard')
+        ->assertSeeText('Customer 01')
+        ->assertDontSeeText('Customer 11')
+        ->call('gotoPage', 2, 'active-customers-page')
+        ->assertSeeText('Customer 11')
+        ->assertDontSeeText('Customer 01')
+        ->call('sortActiveCustomers', 'customer')
+        ->assertSet('activeCustomerSortDirection', 'desc')
+        ->assertSeeText('Customer 12')
+        ->assertDontSeeText('Customer 01');
+
+    Http::assertSentCount(2);
+});
+
+test('authenticated users can visit the customer communication page', function () {
+    $user = User::factory()->create();
+
+    $response = $this->actingAs($user)->get(route('customers.show', ['customer' => 2462]));
+
+    $response
+        ->assertOk()
+        ->assertSee('Customer 2462')
+        ->assertSee('Communication');
 });
 
 test('linked users without a NetSuite sales rep id see an unlinked dashboard state', function () {
