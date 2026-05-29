@@ -45,6 +45,6 @@ class LinkUserToNetSuite
         $user->forceFill([
             'netsuite_user_id' => $netsuiteUserId,
         ])->save();
-        $user->addRole('sales-rep');
+        $user->assignRole('sales-rep');
     }
 }
