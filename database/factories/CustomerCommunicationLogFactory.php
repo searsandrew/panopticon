@@ -21,12 +21,12 @@ class CustomerCommunicationLogFactory extends Factory
     {
         return [
             'user_id' => User::factory(),
-            'netsuite_customer_id' => fake()->numberBetween(1000, 9999),
-            'customer_account_number' => fake()->bothify('?-####'),
-            'customer_name' => fake()->company(),
+            'netsuite_customer_id' => $this->faker->numberBetween(1000, 9999),
+            'customer_account_number' => $this->faker->bothify('?-####'),
+            'customer_name' => $this->faker->company(),
             'netsuite_sales_rep_id' => 2214,
             'communication_type_id' => CommunicationType::factory(),
-            'contact_person_name' => fake()->name(),
+            'contact_person_name' => $this->faker->name(),
             'contact_at' => now(),
             'status' => CustomerCommunicationLog::STATUS_DRAFT,
             'requires_follow_up' => false,

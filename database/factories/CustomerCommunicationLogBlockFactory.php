@@ -22,8 +22,8 @@ class CustomerCommunicationLogBlockFactory extends Factory
         return [
             'customer_communication_log_id' => CustomerCommunicationLog::factory(),
             'communication_block_type_id' => CommunicationBlockType::factory(),
-            'position' => fake()->numberBetween(0, 5),
-            'body' => fake()->paragraph(),
+            'position' => $this->faker->numberBetween(0, 5),
+            'body' => $this->faker->paragraph(),
         ];
     }
 }

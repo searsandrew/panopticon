@@ -17,11 +17,11 @@ class CustomerContactFactory extends Factory
      */
     public function definition(): array
     {
-        $name = fake()->name();
+        $name = $this->faker->name();
 
         return [
-            'netsuite_customer_id' => fake()->numberBetween(1000, 9999),
-            'customer_account_number' => fake()->bothify('?-####'),
+            'netsuite_customer_id' => $this->faker->numberBetween(1000, 9999),
+            'customer_account_number' => $this->faker->bothify('?-####'),
             'name' => $name,
             'normalized_name' => CustomerContact::normalizeName($name),
             'last_used_at' => now(),

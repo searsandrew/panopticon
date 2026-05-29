@@ -18,12 +18,12 @@ class CommunicationTypeFactory extends Factory
      */
     public function definition(): array
     {
-        $name = fake()->unique()->word();
+        $name = $this->faker->unique()->word();
 
         return [
             'name' => Str::headline($name),
             'slug' => Str::slug($name),
-            'sort_order' => fake()->numberBetween(1, 100),
+            'sort_order' => $this->faker->numberBetween(1, 100),
             'is_active' => true,
             'is_system' => false,
         ];
