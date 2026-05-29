@@ -28,7 +28,7 @@ return new class extends Migration
             $table->timestamps();
             $table->softDeletes();
 
-            $table->index(['user_id', 'customer_account_number', 'status']);
+            $table->index(['user_id', 'customer_account_number', 'status'], 'comm_logs_user_account_status_idx');
             $table->index(['netsuite_customer_id', 'status']);
             $table->index('netsuite_sales_rep_id');
         });
