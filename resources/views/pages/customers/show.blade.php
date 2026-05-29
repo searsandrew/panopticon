@@ -767,7 +767,7 @@ new class extends Component {
     </div>
 
     <flux:modal wire:model.self="showLogDetails" class="md:w-2xl">
-        @if ($selectedLog = $this->selectedLog())
+        @if ($showLogDetails && $selectedLog = $this->selectedLog())
             <div class="space-y-6">
                 <div class="space-y-3">
                     <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -844,7 +844,7 @@ new class extends Component {
     </flux:modal>
 
     <flux:modal wire:model.self="showLogHistory" class="md:w-3xl">
-        @if ($historyLog = $this->selectedLog())
+        @if ($showLogHistory && $historyLog = $this->selectedLog())
             <div class="space-y-6">
                 <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div class="space-y-1">

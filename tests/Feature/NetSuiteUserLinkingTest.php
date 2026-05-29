@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\User;
+use Database\Seeders\CommunicationLoggingSeeder;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\URL;
@@ -16,6 +17,8 @@ beforeEach(function () {
     config()->set('briar-rose.rest.retries.enabled', false);
 
     app()->forgetInstance(BriarRoseManager::class);
+
+    $this->seed(CommunicationLoggingSeeder::class);
 
     Http::preventStrayRequests();
 });

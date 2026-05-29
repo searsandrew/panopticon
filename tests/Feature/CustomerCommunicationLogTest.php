@@ -685,7 +685,7 @@ test('submitted logs open a read only details modal with every block', function 
         ->assertSee('Reviewed open opportunities and confirmed follow up timing.')
         ->assertSee('Send the updated sample kit on the next visit.')
         ->assertSee('Alex Buyer')
-        ->assertSee('History')
+        ->assertDontSee('viewLogHistory', false)
         ->assertSee($user->name);
 });
 
@@ -760,6 +760,7 @@ test('log history shows meaningful edits and hides autosave audits', function ()
     ]);
 
     $this->actingAs($user);
+    $user->givePermissionTo('communication-logs.view-history');
 
     $log->update(['last_autosaved_at' => now()->addMinute()]);
     $log->update(['contact_person_name' => 'Taylor Buyer']);

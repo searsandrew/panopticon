@@ -56,7 +56,7 @@ class CustomerCommunicationLogPolicy
      */
     public function viewAuditHistory(User $user, CustomerCommunicationLog $customerCommunicationLog): bool
     {
-        return $user->can('communication-logs.view-audits')
+        return $user->can('communication-logs.view-history')
             && $this->canAccessLog($user, $customerCommunicationLog);
     }
 

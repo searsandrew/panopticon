@@ -63,12 +63,11 @@ class CommunicationLoggingSeeder extends Seeder
     {
         app(PermissionRegistrar::class)->forgetCachedPermissions();
 
-        $permissions = collect([
+        $salesRepPermissions = collect([
             'communication-logs.view',
             'communication-logs.create',
             'communication-logs.update',
             'communication-logs.delete',
-            'communication-logs.view-audits',
             'communication-types.view',
             'communication-types.create',
             'communication-types.update',
@@ -81,17 +80,25 @@ class CommunicationLoggingSeeder extends Seeder
             'customer-contacts.create',
             'customer-contacts.update',
             'customer-contacts.delete',
-        ])->map(fn (string $permission): Permission => Permission::query()->firstOrCreate([
-            'name' => $permission,
-            'guard_name' => 'web',
-        ]));
+        ]);
+
+        $adminOnlyPermissions = collect([
+            'communication-logs.view-history',
+        ]);
+
+        $salesRepPermissions
+            ->concat($adminOnlyPermissions)
+            ->each(fn (string $permission): Permission => Permission::query()->firstOrCreate([
+                'name' => $permission,
+                'guard_name' => 'web',
+            ]));
 
         $role = Role::query()->firstOrCreate([
             'name' => 'sales-rep',
             'guard_name' => 'web',
         ]);
 
-        $role->syncPermissions($permissions);
+        $role->syncPermissions($salesRepPermissions->all());
 
         User::query()->each(fn (User $user) => $user->assignRole($role));
 
