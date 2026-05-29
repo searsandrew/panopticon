@@ -18,8 +18,8 @@
 
                 <div class="relative z-20 mt-auto">
                     <blockquote class="space-y-2">
-                        <flux:heading size="lg" class="text-white text-shadow">&ldquo;{{ trim($message) }}&rdquo;</flux:heading>
-                        <footer><flux:heading class="text-white text-shadow">{{ trim($author) }}</flux:heading></footer>
+                        <flux:heading size="lg" class="text-white text-shadow-lg">&ldquo;{{ trim($message) }}&rdquo;</flux:heading>
+                        <footer><flux:heading class="text-white text-shadow-lg">{{ trim($author) }}</flux:heading></footer>
                     </blockquote>
                 </div>
                 <a href="https://www.pexels.com/photo/lights-on-dome-ceiling-12450216/" class="relative z-20 mt-auto text-xs text-slate-200">{{ __('Photo by Anton Ivanov') }}</a>
