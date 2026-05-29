@@ -25,6 +25,8 @@ class CustomerCommunicationLogFactory extends Factory
             'customer_account_number' => $this->faker->bothify('?-####'),
             'customer_name' => $this->faker->company(),
             'netsuite_sales_rep_id' => 2214,
+            'netsuite_customer_sales_rep_id' => 2214,
+            'netsuite_customer_pipeline_owner_id' => null,
             'communication_type_id' => CommunicationType::factory(),
             'contact_person_name' => $this->faker->name(),
             'contact_at' => now(),

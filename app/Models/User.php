@@ -32,9 +32,30 @@ class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
     {
         return [
             'email_verified_at' => 'datetime',
+            'netsuite_managed_sales_rep_ids' => 'array',
             'netsuite_user_id' => 'integer',
             'password' => 'hashed',
         ];
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    public function netsuiteSalesRepScopeIds(): array
+    {
+        return collect([$this->netsuite_user_id])
+            ->merge(is_array($this->netsuite_managed_sales_rep_ids) ? $this->netsuite_managed_sales_rep_ids : [])
+            ->filter(fn (mixed $salesRepId): bool => is_numeric($salesRepId) && (int) $salesRepId > 0)
+            ->map(fn (mixed $salesRepId): int => (int) $salesRepId)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    public function canAccessNetSuiteSalesRep(mixed $salesRepId): bool
+    {
+        return is_numeric($salesRepId)
+            && in_array((int) $salesRepId, $this->netsuiteSalesRepScopeIds(), true);
     }
 
     /**

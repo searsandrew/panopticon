@@ -29,6 +29,7 @@ class UserFactory extends Factory
             'email' => $this->faker->unique()->safeEmail(),
             'email_verified_at' => now(),
             'netsuite_user_id' => 2214,
+            'netsuite_managed_sales_rep_ids' => [],
             'timezone' => config('panopticon.default_timezone', 'America/Chicago'),
             'password' => static::$password ??= Hash::make('password'),
             'remember_token' => Str::random(10),

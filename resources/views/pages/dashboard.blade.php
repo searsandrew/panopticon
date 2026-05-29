@@ -34,17 +34,17 @@ new #[Title('Dashboard')] class extends Component {
 
     public function mount(NetSuiteCustomerRepository $customers): void
     {
-        $salesRepId = $this->salesRepId();
+        $salesRepIds = $this->salesRepScopeIds();
 
-        if ($salesRepId === null) {
+        if ($salesRepIds === []) {
             return;
         }
 
         $this->pipelineCustomerRows = $this->withCommunicationLogStats(
-            $customers->pipelineForSalesRep($salesRepId),
+            $customers->pipelineForSalesRepScope($salesRepIds),
             includeDraftFollowUps: false,
         );
-        $this->activeCustomerRows = $this->withLastCommunicationLogs($customers->activeForSalesRep($salesRepId));
+        $this->activeCustomerRows = $this->withLastCommunicationLogs($customers->activeForSalesRepScope($salesRepIds));
     }
 
     /**
@@ -265,14 +265,17 @@ new #[Title('Dashboard')] class extends Component {
     #[Computed]
     public function isLinkedToNetSuite(): bool
     {
-        return $this->salesRepId() !== null;
+        return $this->salesRepScopeIds() !== [];
     }
 
-    private function salesRepId(): ?int
+    /**
+     * @return array<int, int>
+     */
+    private function salesRepScopeIds(): array
     {
-        $netsuiteUserId = Auth::user()?->netsuite_user_id;
+        $user = Auth::user();
 
-        return is_int($netsuiteUserId) ? $netsuiteUserId : null;
+        return $user instanceof \App\Models\User ? $user->netsuiteSalesRepScopeIds() : [];
     }
 
     /**
@@ -389,15 +392,12 @@ new #[Title('Dashboard')] class extends Component {
             return $customers;
         }
 
-        $salesRepId = $this->salesRepId();
-
         $lastLogs = collect();
 
         if ($includeLastLog) {
             $lastLogs = CustomerCommunicationLog::query()
                 ->whereIn('netsuite_customer_id', $customerIds)
                 ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
-                ->when($salesRepId !== null, fn ($query) => $query->where('netsuite_sales_rep_id', $salesRepId))
                 ->selectRaw('netsuite_customer_id, max(contact_at) as last_log_at')
                 ->groupBy('netsuite_customer_id')
                 ->pluck('last_log_at', 'netsuite_customer_id');
@@ -406,7 +406,6 @@ new #[Title('Dashboard')] class extends Component {
         $submittedLogCounts = CustomerCommunicationLog::query()
             ->whereIn('netsuite_customer_id', $customerIds)
             ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
-            ->when($salesRepId !== null, fn ($query) => $query->where('netsuite_sales_rep_id', $salesRepId))
             ->selectRaw('netsuite_customer_id, count(*) as submitted_log_count')
             ->groupBy('netsuite_customer_id')
             ->pluck('submitted_log_count', 'netsuite_customer_id');
@@ -414,11 +413,10 @@ new #[Title('Dashboard')] class extends Component {
         $followUpCounts = CustomerCommunicationLog::query()
             ->whereIn('netsuite_customer_id', $customerIds)
             ->where('requires_follow_up', true)
-            ->where(function ($query) use ($includeDraftFollowUps, $salesRepId): void {
-                $query->where(function ($query) use ($salesRepId): void {
+            ->where(function ($query) use ($includeDraftFollowUps): void {
+                $query->where(function ($query): void {
                     $query
-                        ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
-                        ->when($salesRepId !== null, fn ($query) => $query->where('netsuite_sales_rep_id', $salesRepId));
+                        ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED);
                 })->when($includeDraftFollowUps, function ($query): void {
                     $query->orWhere(function ($query): void {
                         $query

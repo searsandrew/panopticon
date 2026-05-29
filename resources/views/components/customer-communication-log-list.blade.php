@@ -3,6 +3,7 @@
 use App\Models\CommunicationBlockType;
 use App\Models\CustomerCommunicationLog;
 use App\Models\CustomerCommunicationLogBlock;
+use App\Models\User;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Auth;
@@ -260,15 +261,15 @@ new class extends Component {
 
     private function userCanAccessCustomer(): bool
     {
-        $netsuiteUserId = Auth::user()?->netsuite_user_id;
+        $user = Auth::user();
 
-        if ($netsuiteUserId === null) {
+        if (! $user instanceof User) {
             return false;
         }
 
         return collect(['sales_rep_id', 'pipeline_owner_id'])
             ->contains(fn (string $key): bool => data_get($this->customer, $key) !== null
-                && (int) data_get($this->customer, $key) === (int) $netsuiteUserId);
+                && $user->canAccessNetSuiteSalesRep(data_get($this->customer, $key)));
     }
 
     private function findLogForCurrentCustomer(string $logId): CustomerCommunicationLog

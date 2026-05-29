@@ -82,8 +82,17 @@ class CustomerCommunicationLogPolicy
             return $customerCommunicationLog->user_id === $user->id;
         }
 
-        return $user->netsuite_user_id !== null
-            && $customerCommunicationLog->netsuite_sales_rep_id !== null
-            && (int) $customerCommunicationLog->netsuite_sales_rep_id === (int) $user->netsuite_user_id;
+        $customerOwnerIds = collect([
+            $customerCommunicationLog->netsuite_customer_sales_rep_id,
+            $customerCommunicationLog->netsuite_customer_pipeline_owner_id,
+        ])->filter(fn (mixed $salesRepId): bool => is_numeric($salesRepId) && (int) $salesRepId > 0);
+
+        if ($customerOwnerIds->isNotEmpty()) {
+            return $customerOwnerIds
+                ->contains(fn (mixed $salesRepId): bool => $user->canAccessNetSuiteSalesRep($salesRepId));
+        }
+
+        return $customerCommunicationLog->netsuite_sales_rep_id !== null
+            && $user->canAccessNetSuiteSalesRep($customerCommunicationLog->netsuite_sales_rep_id);
     }
 }

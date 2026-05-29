@@ -153,7 +153,7 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
             && str_contains($suiteQl, 'CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS')
             && str_contains($suiteQl, 'c.custentity3 AS account_number')
             && str_contains($suiteQl, 'c.custentity_panopticon_sales_pipeline AS pipeline_owner_id')
-            && str_contains($suiteQl, 'c.custentity_panopticon_sales_pipeline = 2214');
+            && str_contains($suiteQl, 'c.custentity_panopticon_sales_pipeline IN (2214)');
     };
 
     $matchesSalesRepCustomerQuery = function (Request $request, int $offset): bool {
@@ -171,7 +171,7 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
             && str_contains($suiteQl, 'BUILTIN.DF(c.category) AS category_name')
             && str_contains($suiteQl, 'c.custentity_panopticon_comm_cadence AS cadence_id')
             && str_contains($suiteQl, 'cadence.scriptid AS cadence_scriptid')
-            && str_contains($suiteQl, 'c.salesrep = 2214');
+            && str_contains($suiteQl, 'c.salesrep IN (2214)');
     };
 
     Http::assertSentInOrder([
@@ -179,6 +179,76 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
         fn (Request $request): bool => $matchesSalesRepCustomerQuery($request, 0),
         fn (Request $request): bool => $matchesSalesRepCustomerQuery($request, 1000),
     ]);
+});
+
+test('sales rep managers see pipeline and active customers for their managed NetSuite reps', function () {
+    config()->set('briar-rose.account', '1234567');
+    config()->set('briar-rose.consumer_key', 'consumer-key');
+    config()->set('briar-rose.consumer_secret', 'consumer-secret');
+    config()->set('briar-rose.token_id', 'token-id');
+    config()->set('briar-rose.token_secret', 'token-secret');
+    config()->set('briar-rose.rest_base_url', 'https://netsuite.test');
+    config()->set('briar-rose.rest.retries.enabled', false);
+
+    app()->forgetInstance(BriarRoseManager::class);
+
+    Http::preventStrayRequests();
+    Http::fake([
+        '*' => Http::sequence()
+            ->push([
+                'items' => [
+                    [
+                        'id' => '3001',
+                        'customer_id' => '3001',
+                        'account_number' => 'P-3001',
+                        'entityid' => 'PROSPECT-3001',
+                        'companyname' => 'Managed Pipeline Parts',
+                        'pipeline_owner_id' => '2214',
+                    ],
+                ],
+                'hasMore' => false,
+            ])
+            ->push([
+                'items' => [
+                    [
+                        'id' => '2462',
+                        'customer_id' => '2462',
+                        'account_number' => 'A-0999',
+                        'entityid' => 'CUST-2462',
+                        'companyname' => 'Managed Customer',
+                        'sales_rep_id' => '2214',
+                        'cadence_name' => 'Monthly',
+                        'cadence_scriptid' => '_P1M',
+                    ],
+                ],
+                'hasMore' => false,
+            ]),
+    ]);
+
+    $user = User::factory()->create([
+        'netsuite_user_id' => 513,
+        'netsuite_managed_sales_rep_ids' => [2214],
+    ]);
+    $this->actingAs($user);
+
+    $response = $this->get(route('dashboard'));
+
+    $response
+        ->assertOk()
+        ->assertSee('Managed Pipeline Parts')
+        ->assertSee('Managed Customer');
+
+    Http::assertSent(function (Request $request): bool {
+        $suiteQl = $request->data()['q'] ?? '';
+
+        return str_contains($suiteQl, 'c.custentity_panopticon_sales_pipeline IN (513, 2214)');
+    });
+
+    Http::assertSent(function (Request $request): bool {
+        $suiteQl = $request->data()['q'] ?? '';
+
+        return str_contains($suiteQl, 'c.salesrep IN (513, 2214)');
+    });
 });
 
 test('active customer table paginates and sorts without refetching NetSuite', function () {

@@ -5,6 +5,7 @@ use App\Models\CommunicationType;
 use App\Models\CustomerCommunicationLog;
 use App\Models\CustomerCommunicationLogBlock;
 use App\Models\CustomerContact;
+use App\Models\User;
 use Flux\Flux;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Carbon;
@@ -202,6 +203,8 @@ new class extends Component {
             'customer_contact_id' => $contact?->id,
             'contact_person_name' => $this->normalizedContactPersonName(),
             'contact_at' => $this->parsedContactAt(),
+            'netsuite_customer_sales_rep_id' => $this->customerOwnerId('sales_rep_id'),
+            'netsuite_customer_pipeline_owner_id' => $this->customerOwnerId('pipeline_owner_id'),
             'status' => CustomerCommunicationLog::STATUS_SUBMITTED,
             'requires_follow_up' => $this->requiresFollowUp,
             'submitted_at' => $log->submitted_at ?? now(),
@@ -337,15 +340,15 @@ new class extends Component {
 
     private function userCanAccessCustomer(): bool
     {
-        $netsuiteUserId = Auth::user()?->netsuite_user_id;
+        $user = Auth::user();
 
-        if ($netsuiteUserId === null) {
+        if (! $user instanceof User) {
             return false;
         }
 
         return collect(['sales_rep_id', 'pipeline_owner_id'])
             ->contains(fn (string $key): bool => data_get($this->customer, $key) !== null
-                && (int) data_get($this->customer, $key) === (int) $netsuiteUserId);
+                && $user->canAccessNetSuiteSalesRep(data_get($this->customer, $key)));
     }
 
     private function createDraft(): CustomerCommunicationLog
@@ -356,6 +359,8 @@ new class extends Component {
             'customer_account_number' => $this->accountNumber,
             'customer_name' => $this->customerName(),
             'netsuite_sales_rep_id' => Auth::user()?->netsuite_user_id,
+            'netsuite_customer_sales_rep_id' => $this->customerOwnerId('sales_rep_id'),
+            'netsuite_customer_pipeline_owner_id' => $this->customerOwnerId('pipeline_owner_id'),
             'communication_type_id' => $this->defaultCommunicationType()->id,
             'contact_at' => now(),
             'status' => CustomerCommunicationLog::STATUS_DRAFT,
@@ -407,6 +412,8 @@ new class extends Component {
         $attributes = [
             'communication_type_id' => $this->communicationTypeId ?: $this->defaultCommunicationType()->id,
             'contact_person_name' => $this->normalizedContactPersonName(),
+            'netsuite_customer_sales_rep_id' => $this->customerOwnerId('sales_rep_id'),
+            'netsuite_customer_pipeline_owner_id' => $this->customerOwnerId('pipeline_owner_id'),
             'requires_follow_up' => $this->requiresFollowUp,
             'last_autosaved_at' => now(),
         ];
@@ -573,6 +580,13 @@ new class extends Component {
     private function customerId(): int
     {
         return (int) data_get($this->customer, 'customer_id');
+    }
+
+    private function customerOwnerId(string $key): ?int
+    {
+        $value = data_get($this->customer, $key);
+
+        return is_numeric($value) && (int) $value > 0 ? (int) $value : null;
     }
 
     private function logBelongsToCurrentCustomer(CustomerCommunicationLog $log): bool

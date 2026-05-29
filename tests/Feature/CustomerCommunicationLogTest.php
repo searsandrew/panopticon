@@ -203,6 +203,9 @@ test('the reusable flyout starts a private draft when opened', function () {
         ->and($draft->user_id)->toBe($user->id)
         ->and($draft->customer_account_number)->toBe('A-0999')
         ->and($draft->netsuite_customer_id)->toBe(2462)
+        ->and($draft->netsuite_sales_rep_id)->toBe(2214)
+        ->and($draft->netsuite_customer_sales_rep_id)->toBe(2214)
+        ->and($draft->netsuite_customer_pipeline_owner_id)->toBeNull()
         ->and($draft->requires_follow_up)->toBeFalse()
         ->and($draft->blocks)->toHaveCount(1);
 });
@@ -299,6 +302,8 @@ test('submitted logs save blocks contacts and audit history', function () {
     expect($submitted->customer_account_number)->toBe('A-0999')
         ->and($submitted->netsuite_customer_id)->toBe(2462)
         ->and($submitted->netsuite_sales_rep_id)->toBe(2214)
+        ->and($submitted->netsuite_customer_sales_rep_id)->toBe(2214)
+        ->and($submitted->netsuite_customer_pipeline_owner_id)->toBeNull()
         ->and($submitted->user_id)->toBe($user->id)
         ->and($submitted->blocks()->count())->toBe(2)
         ->and(CustomerContact::query()->where('netsuite_customer_id', 2462)->where('name', 'Alex Buyer')->exists())->toBeTrue()
@@ -790,6 +795,71 @@ test('customer access is limited to the users linked NetSuite sales rep id', fun
     $response->assertForbidden();
 
     expect(CustomerCommunicationLog::query()->count())->toBe(0);
+});
+
+test('sales rep managers can access managed customers while submitted logs stay customer scoped', function () {
+    configureBriarRoseForCustomerLogTests();
+    fakeCustomerAccountLookup(times: 2);
+
+    $manager = permittedSalesRep($this, [
+        'netsuite_user_id' => 513,
+        'netsuite_managed_sales_rep_ids' => [2214],
+    ]);
+    $salesRep = User::factory()->create([
+        'netsuite_user_id' => 2214,
+        'netsuite_managed_sales_rep_ids' => [],
+    ]);
+    $salesRep->assignRole('sales-rep');
+
+    $this->actingAs($manager)
+        ->get(route('customers.show', ['accountNumber' => 'A-0999']))
+        ->assertOk()
+        ->assertSee('Andrew Apples');
+
+    $this->actingAs($manager);
+
+    Livewire::test('customer-communication-log-flyout', [
+        'customer' => customerLogPayload(),
+        'accountNumber' => 'A-0999',
+    ])
+        ->call('open')
+        ->set('blocks.0.body', 'Manager spoke with the customer on the territory rep account.')
+        ->call('submit')
+        ->assertHasNoErrors();
+
+    $submitted = CustomerCommunicationLog::query()
+        ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
+        ->sole();
+
+    expect($submitted->netsuite_sales_rep_id)->toBe(513)
+        ->and($submitted->netsuite_customer_sales_rep_id)->toBe(2214)
+        ->and($submitted->user_id)->toBe($manager->id);
+
+    $this->actingAs($salesRep);
+
+    Livewire::test('pages::customers.show', ['accountNumber' => 'A-0999'])
+        ->assertSee('Manager spoke with the customer on the territory rep account.')
+        ->call('viewLog', $submitted->id)
+        ->assertSee($manager->name);
+});
+
+test('customer access can be granted through a managed pipeline owner id', function () {
+    configureBriarRoseForCustomerLogTests();
+    fakeCustomerAccountLookup([
+        'sales_rep_id' => '9999',
+        'pipeline_owner_id' => '2214',
+        'pipeline_owner_name' => 'Tom Ruggles',
+    ]);
+
+    $manager = permittedSalesRep($this, [
+        'netsuite_user_id' => 513,
+        'netsuite_managed_sales_rep_ids' => [2214],
+    ]);
+
+    $this->actingAs($manager)
+        ->get(route('customers.show', ['accountNumber' => 'A-0999']))
+        ->assertOk()
+        ->assertSee('Andrew Apples');
 });
 
 test('drafts are private to the app user even when users share a NetSuite id', function () {

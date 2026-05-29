@@ -28,23 +28,33 @@ class LinkUserToNetSuite
 
         $user = $event->user;
 
-        if ($user->netsuite_user_id !== null) {
-            return;
-        }
-
         if ($user instanceof MustVerifyEmail && ! $user->hasVerifiedEmail()) {
             return;
         }
 
-        $netsuiteUserId = $this->employees->resolveIdByEmail($user->email);
+        if ($user->netsuite_user_id !== null) {
+            $managedSalesRepIds = $this->employees->managedSalesRepIdsForEmployee($user->netsuite_user_id);
 
-        if ($netsuiteUserId === null) {
+            if ($managedSalesRepIds !== null) {
+                $user->forceFill([
+                    'netsuite_managed_sales_rep_ids' => $managedSalesRepIds,
+                ])->save();
+            }
+
+            return;
+        }
+
+        $profile = $this->employees->resolveByEmail($user->email);
+
+        if ($profile === null) {
             return;
         }
 
         $user->forceFill([
-            'netsuite_user_id' => $netsuiteUserId,
+            'netsuite_user_id' => $profile['id'],
+            'netsuite_managed_sales_rep_ids' => $profile['managed_sales_rep_ids'],
         ])->save();
+
         $user->assignRole('sales-rep');
     }
 }

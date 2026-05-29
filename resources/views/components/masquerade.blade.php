@@ -14,7 +14,9 @@ new class extends Component
     public function updatedNetSuiteId()
     {
         Auth::user()->netsuite_user_id = $this->netSuiteId;
+        Auth::user()->netsuite_managed_sales_rep_ids = [];
         Auth::user()->save();
+
         return redirect()->route('dashboard');
     }
 };

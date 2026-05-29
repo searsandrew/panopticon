@@ -14,7 +14,22 @@ class NetSuiteCustomerRepository
      */
     public function activeForSalesRep(int $salesRepId): array
     {
-        return $this->customersForQuery($this->activeCustomersQuery($salesRepId));
+        return $this->activeForSalesRepScope([$salesRepId]);
+    }
+
+    /**
+     * @param  array<int, int>  $salesRepIds
+     * @return array<int, array<string, mixed>>
+     */
+    public function activeForSalesRepScope(array $salesRepIds): array
+    {
+        $salesRepIds = $this->normalizeSalesRepIds($salesRepIds);
+
+        if ($salesRepIds === []) {
+            return [];
+        }
+
+        return $this->customersForQuery($this->activeCustomersQuery($salesRepIds));
     }
 
     /**
@@ -22,7 +37,22 @@ class NetSuiteCustomerRepository
      */
     public function pipelineForSalesRep(int $salesRepId): array
     {
-        return $this->customersForQuery($this->pipelineCustomersQuery($salesRepId));
+        return $this->pipelineForSalesRepScope([$salesRepId]);
+    }
+
+    /**
+     * @param  array<int, int>  $salesRepIds
+     * @return array<int, array<string, mixed>>
+     */
+    public function pipelineForSalesRepScope(array $salesRepIds): array
+    {
+        $salesRepIds = $this->normalizeSalesRepIds($salesRepIds);
+
+        if ($salesRepIds === []) {
+            return [];
+        }
+
+        return $this->customersForQuery($this->pipelineCustomersQuery($salesRepIds));
     }
 
     /**
@@ -92,18 +122,24 @@ class NetSuiteCustomerRepository
         ]);
     }
 
-    private function activeCustomersQuery(int $salesRepId): string
+    /**
+     * @param  array<int, int>  $salesRepIds
+     */
+    private function activeCustomersQuery(array $salesRepIds): string
     {
         return sprintf(<<<'SQL'
-            SELECT %s FROM customer c LEFT JOIN CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS cadence ON cadence.id = c.custentity_panopticon_comm_cadence WHERE c.isinactive = 'F' AND c.salesrep = %d ORDER BY c.entityid
-        SQL, $this->customerSelectColumns(), $salesRepId);
+            SELECT %s FROM customer c LEFT JOIN CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS cadence ON cadence.id = c.custentity_panopticon_comm_cadence WHERE c.isinactive = 'F' AND c.salesrep IN (%s) ORDER BY c.entityid
+        SQL, $this->customerSelectColumns(), $this->salesRepIdList($salesRepIds));
     }
 
-    private function pipelineCustomersQuery(int $salesRepId): string
+    /**
+     * @param  array<int, int>  $salesRepIds
+     */
+    private function pipelineCustomersQuery(array $salesRepIds): string
     {
         return sprintf(<<<'SQL'
-            SELECT %s FROM customer c LEFT JOIN CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS cadence ON cadence.id = c.custentity_panopticon_comm_cadence WHERE c.isinactive = 'F' AND c.custentity_panopticon_sales_pipeline = %d ORDER BY c.entityid
-        SQL, $this->customerSelectColumns(), $salesRepId);
+            SELECT %s FROM customer c LEFT JOIN CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS cadence ON cadence.id = c.custentity_panopticon_comm_cadence WHERE c.isinactive = 'F' AND c.custentity_panopticon_sales_pipeline IN (%s) ORDER BY c.entityid
+        SQL, $this->customerSelectColumns(), $this->salesRepIdList($salesRepIds));
     }
 
     private function customerByAccountNumberQuery(string $accountNumber): string
@@ -121,5 +157,27 @@ class NetSuiteCustomerRepository
     private function escapeSuiteQlString(string $value): string
     {
         return str_replace("'", "''", $value);
+    }
+
+    /**
+     * @param  array<int, mixed>  $salesRepIds
+     * @return array<int, int>
+     */
+    private function normalizeSalesRepIds(array $salesRepIds): array
+    {
+        return collect($salesRepIds)
+            ->filter(fn (mixed $salesRepId): bool => is_numeric($salesRepId) && (int) $salesRepId > 0)
+            ->map(fn (mixed $salesRepId): int => (int) $salesRepId)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<int, int>  $salesRepIds
+     */
+    private function salesRepIdList(array $salesRepIds): string
+    {
+        return implode(', ', $this->normalizeSalesRepIds($salesRepIds));
     }
 }
