@@ -64,6 +64,14 @@ function fakeCustomerAccountLookup(array $overrides = [], int $times = 1): void
             'items' => [$customer],
             'hasMore' => false,
         ]);
+        $sequence->push([
+            'items' => [],
+            'hasMore' => false,
+        ]);
+        $sequence->push([
+            'items' => [],
+            'hasMore' => false,
+        ]);
     }
 
     Http::preventStrayRequests();
@@ -96,12 +104,80 @@ test('customers are opened by account number and show the communication log tabl
         ->assertSee('Communication Logs')
         ->assertSee('No communication logs yet.')
         ->assertSee('Add new log')
-        ->assertSee('Signals')
+        ->assertSee('Purchase History')
+        ->assertSee('New Product Gaps')
+        ->assertSee('No purchase history found yet.')
+        ->assertSee('No new product gaps found yet.')
         ->assertSee('data-flux-card', false);
 
     expect(CustomerCommunicationLog::query()->count())->toBe(0);
 
     Http::assertSent(fn (Request $request): bool => str_contains((string) ($request->data()['q'] ?? ''), "c.custentity3 = 'A-0999'"));
+});
+
+test('customer page shows purchase history and new product gaps from NetSuite', function () {
+    configureBriarRoseForCustomerLogTests();
+
+    Http::preventStrayRequests();
+    Http::fake(function (Request $request) {
+        $query = (string) ($request->data()['q'] ?? '');
+
+        if (str_contains($query, "c.custentity3 = 'A-0999'")) {
+            return Http::response([
+                'items' => [customerLogPayload()],
+                'hasMore' => false,
+            ]);
+        }
+
+        if (str_contains($query, 'SUM(ABS(t.foreigntotal))')) {
+            return Http::response([
+                'items' => [
+                    ['period' => '2026-01', 'amount' => '1250.50'],
+                    ['period' => '2026-02', 'amount' => '2400'],
+                ],
+                'hasMore' => false,
+            ]);
+        }
+
+        if (str_contains($query, 'FROM transactionline tl')) {
+            return Http::response([
+                'items' => [
+                    [
+                        'item_id' => '8821',
+                        'itemid' => 'HP-500',
+                        'displayname' => 'Handpiece Pro 500',
+                        'released_at' => '2026-05-01',
+                    ],
+                ],
+                'hasMore' => false,
+            ]);
+        }
+
+        return Http::response([
+            'items' => [],
+            'hasMore' => false,
+        ]);
+    });
+
+    $user = permittedSalesRep($this, [
+        'timezone' => 'UTC',
+    ]);
+
+    $response = $this->actingAs($user)->get(route('customers.show', ['accountNumber' => 'A-0999']));
+
+    $response
+        ->assertOk()
+        ->assertSee('Purchase History')
+        ->assertSee('$3,651')
+        ->assertSee('Jan 2026')
+        ->assertSee('Feb 2026')
+        ->assertSee('New Product Gaps')
+        ->assertSee('Handpiece Pro 500')
+        ->assertSee('HP-500')
+        ->assertSee('May 1, 2026');
+
+    Http::assertSent(fn (Request $request): bool => str_contains((string) ($request->data()['q'] ?? ''), 'SUM(ABS(t.foreigntotal))'));
+    Http::assertSent(fn (Request $request): bool => str_contains((string) ($request->data()['q'] ?? ''), 'FROM transactionline tl'));
 });
 
 test('the reusable flyout starts a private draft when opened', function () {
@@ -266,7 +342,7 @@ test('the customer page lists submitted logs with customer date status and trunc
         ->assertSee('Reviewed open opportunities and confirmed follow up timing.')
         ->assertSee('May 28, 10:30 AM')
         ->assertSee('Submitted')
-        ->assertDontSee('Alex Buyer')
+        ->assertSee('Alex Buyer')
         ->assertSee('truncate whitespace-nowrap overflow-hidden', false)
         ->assertSee('data-flux-table', false);
 });

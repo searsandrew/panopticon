@@ -95,6 +95,6 @@ class CommunicationLoggingSeeder extends Seeder
 
         User::query()->each(fn (User $user) => $user->assignRole($role));
 
-        Permission::create(['name' => 'masquerade']);
+        Permission::updateOrCreate(['name' => 'masquerade']);
     }
 }

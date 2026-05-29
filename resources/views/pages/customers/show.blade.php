@@ -5,6 +5,7 @@ use App\Models\CommunicationType;
 use App\Models\CustomerCommunicationLog;
 use App\Models\CustomerCommunicationLogBlock;
 use App\Services\NetSuite\NetSuiteCustomerRepository;
+use App\Services\NetSuite\NetSuiteCustomerInsightsRepository;
 use Carbon\CarbonInterface;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Collection;
@@ -207,6 +208,62 @@ new class extends Component {
     public function cadenceName(): string
     {
         return (string) (data_get($this->customer, 'cadence_name') ?: __('Not set'));
+    }
+
+    /**
+     * @return array<int, array{period: string, label: string, amount: float}>
+     */
+    #[Computed]
+    public function purchaseHistory(): array
+    {
+        return app(NetSuiteCustomerInsightsRepository::class)
+            ->purchaseHistory($this->customerId());
+    }
+
+    /**
+     * @return array<int, array{item_id: int|null, itemid: string, name: string, released_at: string|null}>
+     */
+    #[Computed]
+    public function newProductGaps(): array
+    {
+        return app(NetSuiteCustomerInsightsRepository::class)
+            ->newlyReleasedItemsNotPurchased($this->customerId());
+    }
+
+    public function purchaseHistoryTotalLabel(): string
+    {
+        $total = collect($this->purchaseHistory)->sum('amount');
+
+        return $this->moneyLabel($total);
+    }
+
+    /**
+     * @param  array{period: string, label: string, amount: float}  $point
+     */
+    public function purchaseHistoryBarHeight(array $point): string
+    {
+        $max = max(collect($this->purchaseHistory)->max('amount') ?: 0, 1);
+        $height = max(8, (int) round(((float) $point['amount'] / $max) * 100));
+
+        return $height.'%';
+    }
+
+    public function moneyLabel(float|int|string|null $amount): string
+    {
+        return '$'.number_format((float) $amount, 0);
+    }
+
+    public function releasedAtLabel(?string $date): string
+    {
+        if ($date === null || trim($date) === '') {
+            return __('Recently released');
+        }
+
+        try {
+            return CarbonImmutable::parse($date)->format('M j, Y');
+        } catch (Throwable) {
+            return $date;
+        }
     }
 
     public function contactAtLabel(CustomerCommunicationLog $log): string
@@ -637,12 +694,74 @@ new class extends Component {
             </flux:card>
 
             <flux:card class="space-y-4">
-                <flux:heading size="md">{{ __('Signals') }}</flux:heading>
-                <div class="space-y-3">
-                    <div class="h-3 rounded-full bg-zinc-100 dark:bg-white/10"></div>
-                    <div class="h-3 w-3/4 rounded-full bg-zinc-100 dark:bg-white/10"></div>
-                    <div class="h-3 w-1/2 rounded-full bg-zinc-100 dark:bg-white/10"></div>
+                <div class="flex items-start justify-between gap-3">
+                    <div>
+                        <flux:heading size="md">{{ __('Purchase History') }}</flux:heading>
+                        <flux:text>{{ __('Last 12 months') }}</flux:text>
+                    </div>
+                    @if ($this->purchaseHistory !== [])
+                        <flux:badge size="sm" color="emerald">{{ $this->purchaseHistoryTotalLabel() }}</flux:badge>
+                    @endif
                 </div>
+
+                @if ($this->purchaseHistory === [])
+                    <div class="rounded-lg border border-zinc-200 p-4 text-sm text-zinc-600 dark:border-white/10 dark:text-zinc-300">
+                        {{ __('No purchase history found yet.') }}
+                    </div>
+                @else
+                    <div class="flex h-32 items-end gap-2 border-b border-zinc-200 pb-2 dark:border-white/10">
+                        @foreach ($this->purchaseHistory as $point)
+                            <div class="flex min-w-0 flex-1 flex-col items-center gap-2">
+                                <div class="flex h-24 w-full items-end">
+                                    <div
+                                        class="w-full rounded-t bg-emerald-500/70 dark:bg-emerald-400/70"
+                                        style="height: {{ $this->purchaseHistoryBarHeight($point) }}"
+                                        title="{{ $point['label'] }}: {{ $this->moneyLabel($point['amount']) }}"
+                                    ></div>
+                                </div>
+                                <div class="max-w-full truncate text-[0.65rem] text-zinc-500 dark:text-zinc-400">
+                                    {{ Str::before($point['label'], ' ') }}
+                                </div>
+                            </div>
+                        @endforeach
+                    </div>
+
+                    <div class="space-y-2">
+                        @foreach (collect($this->purchaseHistory)->sortByDesc('period')->take(3) as $point)
+                            <div class="flex items-center justify-between gap-3 text-sm">
+                                <span class="text-zinc-600 dark:text-zinc-300">{{ $point['label'] }}</span>
+                                <span class="font-medium text-zinc-900 dark:text-zinc-100">{{ $this->moneyLabel($point['amount']) }}</span>
+                            </div>
+                        @endforeach
+                    </div>
+                @endif
+            </flux:card>
+
+            <flux:card class="space-y-4">
+                <div>
+                    <flux:heading size="md">{{ __('New Product Gaps') }}</flux:heading>
+                    <flux:text>{{ __('Recently released items not purchased') }}</flux:text>
+                </div>
+
+                @if ($this->newProductGaps === [])
+                    <div class="rounded-lg border border-zinc-200 p-4 text-sm text-zinc-600 dark:border-white/10 dark:text-zinc-300">
+                        {{ __('No new product gaps found yet.') }}
+                    </div>
+                @else
+                    <div class="space-y-3">
+                        @foreach ($this->newProductGaps as $item)
+                            <div class="border-b border-zinc-200 pb-3 last:border-b-0 last:pb-0 dark:border-white/10">
+                                <div class="text-sm font-medium text-zinc-900 dark:text-zinc-100">{{ $item['name'] }}</div>
+                                <div class="mt-1 flex flex-wrap items-center gap-2">
+                                    @if ($item['itemid'] !== '')
+                                        <flux:badge size="sm" color="zinc">{{ $item['itemid'] }}</flux:badge>
+                                    @endif
+                                    <span class="text-xs text-zinc-500 dark:text-zinc-400">{{ $this->releasedAtLabel($item['released_at']) }}</span>
+                                </div>
+                            </div>
+                        @endforeach
+                    </div>
+                @endif
             </flux:card>
         </aside>
     </div>
