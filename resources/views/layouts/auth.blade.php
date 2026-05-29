@@ -7,7 +7,7 @@
                 <div class="absolute inset-0 bg-[url(/img/pexels-bradanton-12450216.jpg)] bg-cover bg-neutral-900"></div>
                 <a href="{{ route('dashboard') }}" class="relative z-20 flex items-center text-lg font-medium" wire:navigate>
                             <span class="flex h-10 w-10 items-center justify-center rounded-md">
-                                <x-app-logo-icon class="me-2 h-7 fill-current text-white" />
+                                <x-app-logo-icon class="me-2 h-7 fill-current text-white text-shadow-lg/30" />
                             </span>
                     {{ config('app.name', 'Laravel') }}
                 </a>
