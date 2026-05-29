@@ -134,10 +134,11 @@ class NetSuiteCustomerInsightsRepository
     private function newlyReleasedItemsNotPurchasedQuery(int $customerId): string
     {
         return sprintf(<<<'SQL'
-            SELECT i.id AS item_id, i.itemid, i.displayname, TO_CHAR(i.createddate, 'YYYY-MM-DD') AS released_at
+            SELECT i.id AS item_id, i.itemid, i.displayname, TO_CHAR(i.custitemreleasedate, 'YYYY-MM-DD') AS released_at
             FROM item i
             WHERE i.isinactive = 'F'
-                AND i.createddate >= ADD_MONTHS(CURRENT_DATE, -6)
+                AND i.custitem6 = 'T'
+                AND i.custitemreleasedate >= ADD_MONTHS(CURRENT_DATE, -6)
                 AND i.id NOT IN (
                     SELECT tl.item
                     FROM transactionline tl
@@ -146,7 +147,7 @@ class NetSuiteCustomerInsightsRepository
                         AND t.type IN ('CustInvc', 'CashSale', 'SalesOrd')
                         AND tl.item IS NOT NULL
                 )
-            ORDER BY i.createddate DESC, i.itemid
+            ORDER BY i.custitemreleasedate DESC, i.itemid
         SQL, $customerId);
     }
 

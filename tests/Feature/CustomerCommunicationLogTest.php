@@ -139,7 +139,11 @@ test('customer page shows purchase history and new product gaps from NetSuite', 
             ]);
         }
 
-        if (str_contains($query, 'FROM transactionline tl')) {
+        if (
+            str_contains($query, 'FROM transactionline tl')
+            && str_contains($query, "i.custitem6 = 'T'")
+            && str_contains($query, 'i.custitemreleasedate >= ADD_MONTHS(CURRENT_DATE, -6)')
+        ) {
             return Http::response([
                 'items' => [
                     [
@@ -177,7 +181,11 @@ test('customer page shows purchase history and new product gaps from NetSuite', 
         ->assertSee('May 1, 2026');
 
     Http::assertSent(fn (Request $request): bool => str_contains((string) ($request->data()['q'] ?? ''), 'SUM(ABS(t.foreigntotal))'));
-    Http::assertSent(fn (Request $request): bool => str_contains((string) ($request->data()['q'] ?? ''), 'FROM transactionline tl'));
+    Http::assertSent(fn (Request $request): bool => str_contains((string) ($request->data()['q'] ?? ''), 'FROM transactionline tl')
+        && str_contains((string) ($request->data()['q'] ?? ''), "i.custitem6 = 'T'")
+        && str_contains((string) ($request->data()['q'] ?? ''), "TO_CHAR(i.custitemreleasedate, 'YYYY-MM-DD') AS released_at")
+        && str_contains((string) ($request->data()['q'] ?? ''), 'ORDER BY i.custitemreleasedate DESC, i.itemid')
+        && ! str_contains((string) ($request->data()['q'] ?? ''), 'i.createddate'));
 });
 
 test('the reusable flyout starts a private draft when opened', function () {
