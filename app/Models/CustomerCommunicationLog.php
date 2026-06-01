@@ -4,10 +4,12 @@ namespace App\Models;
 
 use Database\Factories\CustomerCommunicationLogFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use OwenIt\Auditing\Auditable as AuditableTrait;
@@ -49,9 +51,36 @@ class CustomerCommunicationLog extends Model implements Auditable
 
     public const STATUS_SUBMITTED = 'submitted';
 
+    public const STATUS_UPDATE_REQUESTED = 'update_requested';
+
     public function isDraft(): bool
     {
         return $this->status === self::STATUS_DRAFT;
+    }
+
+    public function isUpdateRequested(): bool
+    {
+        return $this->status === self::STATUS_UPDATE_REQUESTED;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public static function visibleStatuses(): array
+    {
+        return [
+            self::STATUS_SUBMITTED,
+            self::STATUS_UPDATE_REQUESTED,
+        ];
+    }
+
+    /**
+     * @param  Builder<CustomerCommunicationLog>  $query
+     * @return Builder<CustomerCommunicationLog>
+     */
+    public function scopeVisibleToUsers(Builder $query): Builder
+    {
+        return $query->whereIn('status', self::visibleStatuses());
     }
 
     /**
@@ -84,6 +113,16 @@ class CustomerCommunicationLog extends Model implements Auditable
     public function blocks(): HasMany
     {
         return $this->hasMany(CustomerCommunicationLogBlock::class);
+    }
+
+    /**
+     * @return BelongsToMany<User, CustomerCommunicationLog>
+     */
+    public function readByUsers(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'customer_communication_log_reads')
+            ->withPivot('read_at')
+            ->withTimestamps();
     }
 
     /**

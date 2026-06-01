@@ -397,7 +397,7 @@ new #[Title('Dashboard')] class extends Component {
         if ($includeLastLog) {
             $lastLogs = CustomerCommunicationLog::query()
                 ->whereIn('netsuite_customer_id', $customerIds)
-                ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
+                ->visibleToUsers()
                 ->selectRaw('netsuite_customer_id, max(contact_at) as last_log_at')
                 ->groupBy('netsuite_customer_id')
                 ->pluck('last_log_at', 'netsuite_customer_id');
@@ -405,7 +405,7 @@ new #[Title('Dashboard')] class extends Component {
 
         $submittedLogCounts = CustomerCommunicationLog::query()
             ->whereIn('netsuite_customer_id', $customerIds)
-            ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
+            ->visibleToUsers()
             ->selectRaw('netsuite_customer_id, count(*) as submitted_log_count')
             ->groupBy('netsuite_customer_id')
             ->pluck('submitted_log_count', 'netsuite_customer_id');
@@ -415,8 +415,7 @@ new #[Title('Dashboard')] class extends Component {
             ->where('requires_follow_up', true)
             ->where(function ($query) use ($includeDraftFollowUps): void {
                 $query->where(function ($query): void {
-                    $query
-                        ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED);
+                    $query->visibleToUsers();
                 })->when($includeDraftFollowUps, function ($query): void {
                     $query->orWhere(function ($query): void {
                         $query
