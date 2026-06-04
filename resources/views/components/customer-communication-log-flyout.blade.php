@@ -36,9 +36,15 @@ new class extends Component {
 
     public bool $splitTrigger = false;
 
+    public bool $showTrigger = true;
+
+    public bool $openAnyCustomerLog = false;
+
     public bool $showLogFlyout = false;
 
     public ?string $logId = null;
+
+    public ?string $updateRequestLogId = null;
 
     public bool $editingSubmittedLog = false;
 
@@ -68,6 +74,8 @@ new class extends Component {
         string $triggerSize = 'sm',
         string $triggerVariant = 'primary',
         bool $splitTrigger = false,
+        bool $showTrigger = true,
+        bool $openAnyCustomerLog = false,
     ): void {
         $this->customer = $customer;
         $this->accountNumber = (string) (data_get($customer, 'account_number') ?: $accountNumber);
@@ -76,6 +84,8 @@ new class extends Component {
         $this->triggerSize = $triggerSize;
         $this->triggerVariant = $triggerVariant;
         $this->splitTrigger = $splitTrigger;
+        $this->showTrigger = $showTrigger;
+        $this->openAnyCustomerLog = $openAnyCustomerLog;
     }
 
     public function open(): void
@@ -95,13 +105,40 @@ new class extends Component {
             ->with(['blocks.blockType'])
             ->findOrFail($logId);
 
-        if (! $this->logBelongsToCurrentCustomer($log)) {
+        if ($this->openAnyCustomerLog) {
+            $this->fillCustomerFromLog($log);
+        } elseif (! $this->logBelongsToCurrentCustomer($log)) {
             return;
         }
 
         Gate::authorize('update', $log);
 
         $this->fillFromLog($log);
+        $this->showLogFlyout = true;
+    }
+
+    #[On('provide-communication-log-update')]
+    public function provideUpdate(string $logId): void
+    {
+        $log = CustomerCommunicationLog::query()
+            ->with(['blocks.blockType'])
+            ->visibleToUsers()
+            ->findOrFail($logId);
+
+        Gate::authorize('view', $log);
+        Gate::authorize('create', CustomerCommunicationLog::class);
+
+        if ($this->openAnyCustomerLog) {
+            $this->fillCustomerFromLog($log);
+        } elseif (! $this->logBelongsToCurrentCustomer($log)) {
+            return;
+        }
+
+        $this->updateRequestLogId = $log->id;
+
+        $draft = $this->createDraft()->load(['blocks.blockType']);
+
+        $this->fillFromLog($draft);
         $this->showLogFlyout = true;
     }
 
@@ -209,9 +246,11 @@ new class extends Component {
             'requires_follow_up' => $this->requiresFollowUp,
             'submitted_at' => $log->submitted_at ?? now(),
             'last_autosaved_at' => now(),
+            'update_requested_log_id' => $this->updateRequestLogId,
         ])->save();
 
         $this->syncBlocks($log);
+        $this->resolveUpdateRequest($log);
         $this->resetLogState();
 
         $this->showLogFlyout = false;
@@ -366,6 +405,7 @@ new class extends Component {
             'status' => CustomerCommunicationLog::STATUS_DRAFT,
             'requires_follow_up' => false,
             'last_autosaved_at' => now(),
+            'update_requested_log_id' => $this->updateRequestLogId,
         ]);
 
         $log->blocks()->create([
@@ -380,6 +420,7 @@ new class extends Component {
     private function fillFromLog(CustomerCommunicationLog $log): void
     {
         $this->logId = $log->id;
+        $this->updateRequestLogId = $log->update_requested_log_id;
         $this->editingSubmittedLog = ! $log->isDraft();
         $this->contactAt = ($log->contact_at ?? now())->copy()->timezone($this->userTimezone())->format('Y-m-d\TH:i');
         $this->communicationTypeId = $log->communication_type_id;
@@ -399,6 +440,19 @@ new class extends Component {
         $this->ensureSummaryBlock();
     }
 
+    private function fillCustomerFromLog(CustomerCommunicationLog $log): void
+    {
+        $this->accountNumber = (string) $log->customer_account_number;
+        $this->customer = [
+            'account_number' => $log->customer_account_number,
+            'companyname' => $log->customer_name,
+            'customer_id' => $log->netsuite_customer_id,
+            'entityid' => $log->customer_account_number,
+            'pipeline_owner_id' => $log->netsuite_customer_pipeline_owner_id,
+            'sales_rep_id' => $log->netsuite_customer_sales_rep_id ?? $log->netsuite_sales_rep_id,
+        ];
+    }
+
     private function autosaveLog(): void
     {
         if ($this->logId === null) {
@@ -416,6 +470,7 @@ new class extends Component {
             'netsuite_customer_pipeline_owner_id' => $this->customerOwnerId('pipeline_owner_id'),
             'requires_follow_up' => $this->requiresFollowUp,
             'last_autosaved_at' => now(),
+            'update_requested_log_id' => $this->updateRequestLogId,
         ];
 
         if ($contactAt = $this->parsedContactAt()) {
@@ -432,6 +487,18 @@ new class extends Component {
     {
         return CustomerCommunicationLog::query()
             ->findOrFail($this->logId);
+    }
+
+    private function resolveUpdateRequest(CustomerCommunicationLog $log): void
+    {
+        if ($log->update_requested_log_id === null) {
+            return;
+        }
+
+        CustomerCommunicationLog::query()
+            ->whereKey($log->update_requested_log_id)
+            ->where('status', CustomerCommunicationLog::STATUS_UPDATE_REQUESTED)
+            ->update(['status' => CustomerCommunicationLog::STATUS_SUBMITTED]);
     }
 
     private function syncBlocks(CustomerCommunicationLog $log): void
@@ -637,6 +704,7 @@ new class extends Component {
     private function resetLogState(): void
     {
         $this->logId = null;
+        $this->updateRequestLogId = null;
         $this->editingSubmittedLog = false;
         $this->contactAt = '';
         $this->communicationTypeId = null;
@@ -649,42 +717,44 @@ new class extends Component {
 ?>
 
 <div>
-    @can('create', \App\Models\CustomerCommunicationLog::class)
-        @if ($splitTrigger)
-            <flux:button.group>
+    @if ($showTrigger)
+        @can('create', \App\Models\CustomerCommunicationLog::class)
+            @if ($splitTrigger)
+                <flux:button.group>
+                    <flux:button
+                        type="button"
+                        :size="$triggerSize"
+                        :variant="$triggerVariant ?: null"
+                        :icon="$triggerIcon"
+                        wire:click="open"
+                    >
+                        {{ __($triggerLabel) }}
+                    </flux:button>
+                    <flux:button
+                        type="button"
+                        :size="$triggerSize"
+                        :variant="$triggerVariant ?: null"
+                        icon="plus"
+                        wire:click="open"
+                        :aria-label="__('Add log entry')"
+                    />
+                </flux:button.group>
+            @else
                 <flux:button
                     type="button"
                     :size="$triggerSize"
                     :variant="$triggerVariant ?: null"
                     :icon="$triggerIcon"
                     wire:click="open"
+                    :aria-label="$triggerLabel === '' ? __('Add log entry') : null"
                 >
-                    {{ __($triggerLabel) }}
+                    @if ($triggerLabel !== '')
+                        {{ __($triggerLabel) }}
+                    @endif
                 </flux:button>
-                <flux:button
-                    type="button"
-                    :size="$triggerSize"
-                    :variant="$triggerVariant ?: null"
-                    icon="plus"
-                    wire:click="open"
-                    :aria-label="__('Add log entry')"
-                />
-            </flux:button.group>
-        @else
-            <flux:button
-                type="button"
-                :size="$triggerSize"
-                :variant="$triggerVariant ?: null"
-                :icon="$triggerIcon"
-                wire:click="open"
-                :aria-label="$triggerLabel === '' ? __('Add log entry') : null"
-            >
-                @if ($triggerLabel !== '')
-                    {{ __($triggerLabel) }}
-                @endif
-            </flux:button>
-        @endif
-    @endcan
+            @endif
+        @endcan
+    @endif
 
     @if ($showLogFlyout || $logId)
         <flux:modal wire:model.self="showLogFlyout" @close="close" @cancel="close" flyout variant="floating" class="md:w-2xl">

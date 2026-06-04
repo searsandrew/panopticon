@@ -47,7 +47,7 @@ class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
     public function readCommunicationLogs(): BelongsToMany
     {
         return $this->belongsToMany(CustomerCommunicationLog::class, 'customer_communication_log_reads')
-            ->withPivot('read_at')
+            ->withPivot('cleared_at', 'read_at')
             ->withTimestamps();
     }
 

@@ -59,7 +59,7 @@ test('non admins cannot open the admin communication log queue', function () {
         ->assertForbidden();
 });
 
-test('admin queue lists logs submitted since the previous login and tracks read state', function () {
+test('admin queue lists logs uncleared by the current admin and tracks read state', function () {
     $this->seed(CommunicationLoggingSeeder::class);
 
     $admin = configureAdminLogTestAdmin();
@@ -67,40 +67,55 @@ test('admin queue lists logs submitted since the previous login and tracks read 
     $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
     $summaryType = CommunicationBlockType::query()->where('slug', CommunicationBlockType::SUMMARY)->sole();
 
-    $newLog = createAdminSubmittedLog($salesRep, $type, $summaryType, 'New admin queue summary.', [
-        'customer_name' => 'New Customer',
+    $unreadLog = createAdminSubmittedLog($salesRep, $type, $summaryType, 'Older unread admin queue summary.', [
+        'customer_name' => 'Older Customer',
+        'submitted_at' => now()->subDays(2),
+    ]);
+
+    $readLog = createAdminSubmittedLog($salesRep, $type, $summaryType, 'Newer read admin queue summary.', [
+        'customer_name' => 'Read Customer',
         'submitted_at' => now()->subHour(),
     ]);
 
-    createAdminSubmittedLog($salesRep, $type, $summaryType, 'Old admin queue summary.', [
-        'customer_name' => 'Old Customer',
-        'submitted_at' => now()->subDays(2),
+    $readLog->readByUsers()->attach($admin->id, [
+        'read_at' => now(),
     ]);
 
     $this->actingAs($admin);
 
     Livewire::test('pages::admin.index')
-        ->assertSee('New admin queue summary.')
-        ->assertSee('New Customer')
+        ->assertSee('Older Customer')
+        ->assertSee('Read Customer')
+        ->assertSee('A-1001')
         ->assertSee('Sam Seller')
-        ->assertSee('Mark as Read')
-        ->assertDontSee('Old admin queue summary.')
-        ->call('markAsRead', $newLog->id)
-        ->assertSee('Mark as Unread');
+        ->assertSee('Uncleared for you')
+        ->assertSee('Phone')
+        ->assertSee('Summary')
+        ->assertSee('Submitted')
+        ->assertSee('Status')
+        ->assertDontSee('Options')
+        ->assertSee('bg-blue-500', false)
+        ->call('markAsRead', $unreadLog->id)
+        ->assertSee('Older Customer')
+        ->assertDontSee('bg-blue-500', false);
 
     expect(DB::table('customer_communication_log_reads')
-        ->where('customer_communication_log_id', $newLog->id)
+        ->where('customer_communication_log_id', $unreadLog->id)
         ->where('user_id', $admin->id)
         ->exists())->toBeTrue();
 
     Livewire::test('pages::admin.index')
-        ->call('markAsUnread', $newLog->id)
-        ->assertSee('Mark as Read');
+        ->call('markAsUnread', $readLog->id)
+        ->assertSee('Read Customer')
+        ->assertSee('bg-blue-500', false)
+        ->call('clearLog', $readLog->id)
+        ->assertDontSee('Read Customer');
 
     expect(DB::table('customer_communication_log_reads')
-        ->where('customer_communication_log_id', $newLog->id)
+        ->where('customer_communication_log_id', $readLog->id)
         ->where('user_id', $admin->id)
-        ->exists())->toBeFalse();
+        ->whereNotNull('cleared_at')
+        ->exists())->toBeTrue();
 });
 
 test('opening an admin log marks it read and opens the shared details modal', function () {
@@ -125,7 +140,7 @@ test('opening an admin log marks it read and opens the shared details modal', fu
         ->exists())->toBeTrue();
 });
 
-test('admin context actions flag request update and archive logs', function () {
+test('admin context actions flag request update clear and archive logs', function () {
     $this->seed(CommunicationLoggingSeeder::class);
 
     $admin = configureAdminLogTestAdmin();
@@ -143,9 +158,19 @@ test('admin context actions flag request update and archive logs', function () {
         ->call('requestUpdate', $log->id)
         ->assertDispatched('communication-log-saved')
         ->assertSee('Update requested')
+        ->call('clearLog', $log->id)
+        ->assertDontSee('Acme Dental');
+
+    expect(DB::table('customer_communication_log_reads')
+        ->where('customer_communication_log_id', $log->id)
+        ->where('user_id', $admin->id)
+        ->whereNotNull('cleared_at')
+        ->exists())->toBeTrue();
+
+    Livewire::test('pages::admin.index')
         ->call('archiveLog', $log->id)
         ->assertDispatched('communication-log-saved')
-        ->assertDontSee('Admin action summary.');
+        ->assertDontSee('Acme Dental');
 
     $archivedLog = CustomerCommunicationLog::withTrashed()->findOrFail($log->id);
 
@@ -156,4 +181,119 @@ test('admin context actions flag request update and archive logs', function () {
     $this->assertSoftDeleted('customer_communication_logs', [
         'id' => $log->id,
     ]);
+});
+
+test('admin editor flyout opens submitted logs from the shared detail modal edit event', function () {
+    $this->seed(CommunicationLoggingSeeder::class);
+
+    $admin = configureAdminLogTestAdmin();
+    $salesRep = User::factory()->create();
+    $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
+    $summaryType = CommunicationBlockType::query()->where('slug', CommunicationBlockType::SUMMARY)->sole();
+
+    $log = createAdminSubmittedLog($salesRep, $type, $summaryType, 'Admin editable summary.', [
+        'customer_name' => 'Editable Customer',
+        'customer_account_number' => 'E-4444',
+        'netsuite_customer_id' => 4444,
+    ]);
+
+    $this->actingAs($admin);
+
+    Livewire::test('customer-communication-log-flyout', [
+        'customer' => [],
+        'accountNumber' => '',
+        'showTrigger' => false,
+        'openAnyCustomerLog' => true,
+    ])
+        ->call('openExisting', $log->id)
+        ->assertSet('showLogFlyout', true)
+        ->assertSet('editingSubmittedLog', true)
+        ->assertSet('accountNumber', 'E-4444')
+        ->assertSee('Edit Communication')
+        ->assertSee('Editable Customer');
+});
+
+test('admin archive action soft deletes logs', function () {
+    $this->seed(CommunicationLoggingSeeder::class);
+
+    $admin = configureAdminLogTestAdmin();
+    $salesRep = User::factory()->create();
+    $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
+    $summaryType = CommunicationBlockType::query()->where('slug', CommunicationBlockType::SUMMARY)->sole();
+
+    $log = createAdminSubmittedLog($salesRep, $type, $summaryType, 'Admin archive summary.');
+
+    $this->actingAs($admin);
+
+    Livewire::test('pages::admin.index')
+        ->call('archiveLog', $log->id)
+        ->assertDispatched('communication-log-saved')
+        ->assertDontSee('Acme Dental');
+
+    $archivedLog = CustomerCommunicationLog::withTrashed()->findOrFail($log->id);
+
+    expect($archivedLog->trashed())->toBeTrue();
+
+    $this->assertSoftDeleted('customer_communication_logs', [
+        'id' => $log->id,
+    ]);
+});
+
+test('admin queue filters by contact user block category and read state', function () {
+    $this->seed(CommunicationLoggingSeeder::class);
+
+    $admin = configureAdminLogTestAdmin();
+    $firstSalesRep = User::factory()->create(['name' => 'Sam Seller']);
+    $secondSalesRep = User::factory()->create(['name' => 'Tina Tech']);
+    $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
+    $summaryType = CommunicationBlockType::query()->where('slug', CommunicationBlockType::SUMMARY)->sole();
+    $warrantyType = CommunicationBlockType::query()->where('slug', 'warranty')->sole();
+
+    $warrantyLog = createAdminSubmittedLog($firstSalesRep, $type, $summaryType, 'Warranty admin queue summary.', [
+        'customer_name' => 'Warranty Customer',
+        'submitted_at' => now()->subMinutes(30),
+    ]);
+    $warrantyLog->blocks()->create([
+        'communication_block_type_id' => $warrantyType->id,
+        'position' => 1,
+        'body' => 'Warranty block details.',
+    ]);
+
+    $readLog = createAdminSubmittedLog($secondSalesRep, $type, $summaryType, 'Read admin queue summary.', [
+        'customer_name' => 'Read Filter Customer',
+        'submitted_at' => now()->subMinutes(20),
+    ]);
+    $readLog->readByUsers()->attach($admin->id, [
+        'read_at' => now(),
+    ]);
+
+    $archivedLog = createAdminSubmittedLog($firstSalesRep, $type, $summaryType, 'Archived admin queue summary.', [
+        'customer_name' => 'Archived Customer',
+        'submitted_at' => now()->subMinutes(10),
+    ]);
+    $archivedLog->delete();
+
+    $this->actingAs($admin);
+
+    Livewire::test('pages::admin.index')
+        ->assertSee('Warranty Customer')
+        ->assertSee('Read Filter Customer')
+        ->assertDontSee('Archived Customer')
+        ->set('userFilter', $secondSalesRep->id)
+        ->assertSee('Read Filter Customer')
+        ->assertDontSee('Warranty Customer')
+        ->set('userFilter', 'all')
+        ->set('blockTypeFilter', $warrantyType->id)
+        ->assertSee('Warranty Customer')
+        ->assertDontSee('Read Filter Customer')
+        ->set('blockTypeFilter', 'all')
+        ->set('readStateFilter', 'read')
+        ->assertSee('Read Filter Customer')
+        ->assertDontSee('Warranty Customer')
+        ->set('readStateFilter', 'unread')
+        ->assertSee('Warranty Customer')
+        ->assertDontSee('Read Filter Customer')
+        ->set('readStateFilter', 'archived')
+        ->assertSee('Archived Customer')
+        ->assertDontSee('Warranty Customer');
 });

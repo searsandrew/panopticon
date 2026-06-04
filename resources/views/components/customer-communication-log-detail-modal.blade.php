@@ -66,6 +66,18 @@ new class extends Component {
         $this->dispatch('open-communication-log-editor', logId: $log->id);
     }
 
+    public function provideUpdate(string $logId): void
+    {
+        $log = $this->findVisibleLog($logId);
+
+        Gate::authorize('view', $log);
+        Gate::authorize('create', CustomerCommunicationLog::class);
+
+        $this->close();
+
+        $this->dispatch('provide-communication-log-update', logId: $log->id);
+    }
+
     public function selectedLog(): ?CustomerCommunicationLog
     {
         if ($this->selectedLogId === null) {
@@ -73,7 +85,8 @@ new class extends Component {
         }
 
         $log = CustomerCommunicationLog::query()
-            ->with(['communicationType', 'user', 'blocks.blockType'])
+            ->withTrashed()
+            ->with(['communicationType', 'updateRequest', 'updateResponses', 'user', 'blocks.blockType'])
             ->visibleToUsers()
             ->find($this->selectedLogId);
 
@@ -99,7 +112,8 @@ new class extends Component {
     private function findVisibleLog(string $logId): CustomerCommunicationLog
     {
         return CustomerCommunicationLog::query()
-            ->with(['communicationType', 'user', 'blocks.blockType'])
+            ->withTrashed()
+            ->with(['communicationType', 'updateRequest', 'updateResponses', 'user', 'blocks.blockType'])
             ->visibleToUsers()
             ->findOrFail($logId);
     }
@@ -124,9 +138,16 @@ new class extends Component {
                         <flux:modal.close>
                             <flux:button type="button" variant="filled">{{ __('Close') }}</flux:button>
                         </flux:modal.close>
-                        <flux:button type="button" variant="primary" icon="pencil" wire:click="editLog('{{ $selectedLog->id }}')">
-                            {{ __('Edit') }}
-                        </flux:button>
+                        @if (! $selectedLog->trashed())
+                            @if ($selectedLog->isUpdateRequested())
+                                <flux:button type="button" variant="primary" icon="chat-bubble-left-right" wire:click="provideUpdate('{{ $selectedLog->id }}')">
+                                    {{ __('Provide Update') }}
+                                </flux:button>
+                            @endif
+                            <flux:button type="button" variant="{{ $selectedLog->isUpdateRequested() ? 'ghost' : 'primary' }}" icon="pencil" wire:click="editLog('{{ $selectedLog->id }}')">
+                                {{ __('Edit') }}
+                            </flux:button>
+                        @endif
                     </div>
                 </div>
             </x-slot:actions>

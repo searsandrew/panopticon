@@ -230,7 +230,7 @@ new class extends Component {
     {
         return match ($log->status) {
             CustomerCommunicationLog::STATUS_DRAFT => 'zinc',
-            CustomerCommunicationLog::STATUS_UPDATE_REQUESTED => 'amber',
+            CustomerCommunicationLog::STATUS_UPDATE_REQUESTED => 'red',
             default => 'emerald',
         };
     }

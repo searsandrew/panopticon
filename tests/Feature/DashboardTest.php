@@ -111,6 +111,17 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
             'requires_follow_up' => true,
         ]);
 
+    CustomerCommunicationLog::factory()
+        ->submitted()
+        ->for($user)
+        ->for($type, 'communicationType')
+        ->create([
+            'netsuite_customer_id' => 2462,
+            'customer_account_number' => 'A-0999',
+            'customer_name' => 'Acme Dental',
+            'status' => CustomerCommunicationLog::STATUS_UPDATE_REQUESTED,
+        ]);
+
     $this->actingAs($user);
 
     $response = $this->get(route('dashboard'));
@@ -121,6 +132,7 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
         ->assertSee('lead@pipeline.test')
         ->assertSee('555-0199')
         ->assertSee('1 log')
+        ->assertSee('1 update requested')
         ->assertSee('Add log')
         ->assertSee('Acme Dental')
         ->assertSee('Bright Smiles')
@@ -134,6 +146,7 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
         ->assertSee('Contact Due')
         ->assertSee('Due now')
         ->assertSee('bg-yellow-400/25', false)
+        ->assertSee('bg-red-400/20', false)
         ->assertDontSee('Duration')
         ->assertSee('data-flux-card', false)
         ->assertSee('data-flux-table', false)

@@ -23,7 +23,7 @@
 
     $statusBadgeColor = match ($log->status) {
         \App\Models\CustomerCommunicationLog::STATUS_DRAFT => 'zinc',
-        \App\Models\CustomerCommunicationLog::STATUS_UPDATE_REQUESTED => 'amber',
+        \App\Models\CustomerCommunicationLog::STATUS_UPDATE_REQUESTED => 'red',
         default => 'emerald',
     };
 
@@ -41,6 +41,9 @@
         'assistance' => 'emerald',
         default => 'zinc',
     };
+
+    $requestLog = $log->updateRequest;
+    $updateResponses = $log->relationLoaded('updateResponses') ? $log->updateResponses : collect();
 @endphp
 
 <div class="space-y-6">
@@ -74,6 +77,20 @@
                 <dd class="text-zinc-900 dark:text-zinc-100">{{ $log->user?->name ?? __('Unknown') }}</dd>
             </div>
         </dl>
+
+        @if ($requestLog)
+            <div class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-100">
+                {{ __('Provides update for requested log from :date.', [
+                    'date' => $requestLog->contact_at instanceof \Carbon\CarbonInterface
+                        ? $requestLog->contact_at->copy()->timezone($timezone)->format('M j, g:i A')
+                        : __('unknown date'),
+                ]) }}
+            </div>
+        @elseif ($updateResponses->isNotEmpty())
+            <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-100">
+                {{ trans_choice(':count update has been provided for this request.|:count updates have been provided for this request.', $updateResponses->count(), ['count' => $updateResponses->count()]) }}
+            </div>
+        @endif
     </div>
 
     <div class="space-y-4">

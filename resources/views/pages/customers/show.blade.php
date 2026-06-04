@@ -66,7 +66,7 @@ new class extends Component {
     public function communicationLogs(): LengthAwarePaginator
     {
         return CustomerCommunicationLog::query()
-            ->with(['communicationType', 'user', 'blocks.blockType'])
+            ->with(['communicationType', 'updateRequest', 'updateResponses', 'user', 'blocks.blockType'])
             ->where('netsuite_customer_id', $this->customerId())
             ->where(function ($query): void {
                 $query->visibleToUsers()
@@ -117,6 +117,20 @@ new class extends Component {
         $this->showLogHistory = false;
 
         $this->dispatch('open-communication-log-editor', logId: $log->id);
+    }
+
+    public function provideUpdate(string $logId): void
+    {
+        $log = $this->findLogForCurrentCustomer($logId);
+
+        Gate::authorize('view', $log);
+        Gate::authorize('create', CustomerCommunicationLog::class);
+
+        $this->selectedLogId = null;
+        $this->showLogDetails = false;
+        $this->showLogHistory = false;
+
+        $this->dispatch('provide-communication-log-update', logId: $log->id);
     }
 
     public function viewLogHistory(string $logId): void
@@ -289,7 +303,7 @@ new class extends Component {
     {
         return match ($log->status) {
             CustomerCommunicationLog::STATUS_DRAFT => 'zinc',
-            CustomerCommunicationLog::STATUS_UPDATE_REQUESTED => 'amber',
+            CustomerCommunicationLog::STATUS_UPDATE_REQUESTED => 'red',
             default => 'emerald',
         };
     }
@@ -377,7 +391,7 @@ new class extends Component {
         }
 
         $log = CustomerCommunicationLog::query()
-            ->with(['communicationType', 'user', 'blocks.blockType'])
+            ->with(['communicationType', 'updateRequest', 'updateResponses', 'user', 'blocks.blockType'])
             ->find($this->selectedLogId);
 
         if (! $log instanceof CustomerCommunicationLog || ! $this->logBelongsToCurrentCustomer($log) || $log->isDraft()) {
@@ -554,7 +568,7 @@ new class extends Component {
     private function findLogForCurrentCustomer(string $logId): CustomerCommunicationLog
     {
         $log = CustomerCommunicationLog::query()
-            ->with(['communicationType', 'user', 'blocks.blockType'])
+            ->with(['communicationType', 'updateRequest', 'updateResponses', 'user', 'blocks.blockType'])
             ->findOrFail($logId);
 
         abort_unless($this->logBelongsToCurrentCustomer($log), 404);
@@ -801,7 +815,12 @@ new class extends Component {
                         <flux:modal.close>
                             <flux:button type="button" variant="filled">{{ __('Close') }}</flux:button>
                         </flux:modal.close>
-                        <flux:button type="button" variant="primary" icon="pencil" wire:click="editLog('{{ $selectedLog->id }}')">
+                        @if ($selectedLog->isUpdateRequested())
+                            <flux:button type="button" variant="primary" icon="chat-bubble-left-right" wire:click="provideUpdate('{{ $selectedLog->id }}')">
+                                {{ __('Provide Update') }}
+                            </flux:button>
+                        @endif
+                        <flux:button type="button" variant="{{ $selectedLog->isUpdateRequested() ? 'ghost' : 'primary' }}" icon="pencil" wire:click="editLog('{{ $selectedLog->id }}')">
                             {{ __('Edit') }}
                         </flux:button>
                     </div>

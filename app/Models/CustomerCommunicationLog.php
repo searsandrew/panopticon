@@ -31,6 +31,7 @@ use OwenIt\Auditing\Contracts\Auditable;
     'requires_follow_up',
     'submitted_at',
     'last_autosaved_at',
+    'update_requested_log_id',
     'communication_block_type_id',
     'position',
     'body',
@@ -108,6 +109,22 @@ class CustomerCommunicationLog extends Model implements Auditable
     }
 
     /**
+     * @return BelongsTo<CustomerCommunicationLog, CustomerCommunicationLog>
+     */
+    public function updateRequest(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'update_requested_log_id');
+    }
+
+    /**
+     * @return HasMany<CustomerCommunicationLog>
+     */
+    public function updateResponses(): HasMany
+    {
+        return $this->hasMany(self::class, 'update_requested_log_id');
+    }
+
+    /**
      * @return HasMany<CustomerCommunicationLogBlock>
      */
     public function blocks(): HasMany
@@ -121,7 +138,7 @@ class CustomerCommunicationLog extends Model implements Auditable
     public function readByUsers(): BelongsToMany
     {
         return $this->belongsToMany(User::class, 'customer_communication_log_reads')
-            ->withPivot('read_at')
+            ->withPivot('cleared_at', 'read_at')
             ->withTimestamps();
     }
 

@@ -748,6 +748,53 @@ test('submitted logs can be softly edited from the shared flyout', function () {
         ->and(DB::table('audits')->where('auditable_type', CustomerCommunicationLog::class)->where('auditable_id', $log->id)->exists())->toBeTrue();
 });
 
+test('users can provide a linked update for requested logs', function () {
+    configureBriarRoseForCustomerLogTests();
+
+    $user = permittedSalesRep($this);
+    $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
+    $summaryType = CommunicationBlockType::query()->where('slug', CommunicationBlockType::SUMMARY)->sole();
+
+    $requestedLog = CustomerCommunicationLog::factory()
+        ->submitted()
+        ->for($user)
+        ->for($type, 'communicationType')
+        ->create([
+            'netsuite_customer_id' => 2462,
+            'customer_account_number' => 'A-0999',
+            'customer_name' => 'Andrew Apples',
+            'status' => CustomerCommunicationLog::STATUS_UPDATE_REQUESTED,
+        ]);
+
+    $requestedLog->blocks()->create([
+        'communication_block_type_id' => $summaryType->id,
+        'position' => 0,
+        'body' => 'Please add detail about the warranty concern.',
+    ]);
+
+    $this->actingAs($user);
+
+    Livewire::test('customer-communication-log-flyout', [
+        'customer' => customerLogPayload(),
+        'accountNumber' => 'A-0999',
+    ])
+        ->call('provideUpdate', $requestedLog->id)
+        ->assertSet('showLogFlyout', true)
+        ->assertSet('updateRequestLogId', $requestedLog->id)
+        ->set('blocks.0.body', 'Customer confirmed the warranty unit is being replaced.')
+        ->call('submit')
+        ->assertHasNoErrors()
+        ->assertDispatched('communication-log-saved');
+
+    $responseLog = CustomerCommunicationLog::query()
+        ->where('update_requested_log_id', $requestedLog->id)
+        ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
+        ->sole();
+
+    expect($responseLog->blocks()->sole()->body)->toBe('Customer confirmed the warranty unit is being replaced.')
+        ->and($requestedLog->refresh()->status)->toBe(CustomerCommunicationLog::STATUS_SUBMITTED);
+});
+
 test('log history shows meaningful edits and hides autosave audits', function () {
     configureBriarRoseForCustomerLogTests();
     fakeCustomerAccountLookup();
