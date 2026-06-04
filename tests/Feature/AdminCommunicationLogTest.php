@@ -158,6 +158,7 @@ test('admin context actions flag request update clear and archive logs', functio
         ->call('requestUpdate', $log->id)
         ->assertDispatched('communication-log-saved')
         ->assertSee('Update requested')
+        ->assertSee('Archive this log for all users? This removes it from active log views for everyone.')
         ->call('clearLog', $log->id)
         ->assertDontSee('Acme Dental');
 
@@ -176,11 +177,68 @@ test('admin context actions flag request update clear and archive logs', functio
 
     expect($archivedLog)
         ->requires_follow_up->toBeTrue()
-        ->status->toBe(CustomerCommunicationLog::STATUS_UPDATE_REQUESTED);
+        ->status->toBe(CustomerCommunicationLog::STATUS_UPDATE_REQUESTED)
+        ->update_requested_by_user_id->toBe($admin->id);
 
     $this->assertSoftDeleted('customer_communication_logs', [
         'id' => $log->id,
     ]);
+});
+
+test('admin queue flags linked updates requested by the current admin', function () {
+    $this->seed(CommunicationLoggingSeeder::class);
+
+    $admin = configureAdminLogTestAdmin();
+    $salesRep = User::factory()->create();
+    $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
+    $summaryType = CommunicationBlockType::query()->where('slug', CommunicationBlockType::SUMMARY)->sole();
+
+    $requestedLog = createAdminSubmittedLog($salesRep, $type, $summaryType, 'Admin requested more context.', [
+        'status' => CustomerCommunicationLog::STATUS_SUBMITTED,
+        'update_requested_by_user_id' => $admin->id,
+    ]);
+
+    createAdminSubmittedLog($salesRep, $type, $summaryType, 'Here is the update the admin requested.', [
+        'customer_name' => 'Response Customer',
+        'update_requested_log_id' => $requestedLog->id,
+    ]);
+
+    $this->actingAs($admin);
+
+    Livewire::test('pages::admin.index')
+        ->assertSee('Response Customer')
+        ->assertSee('Update to your request')
+        ->assertSee('bg-red-50/70', false);
+});
+
+test('admin navigation item shows unread log count', function () {
+    $this->seed(CommunicationLoggingSeeder::class);
+
+    $admin = configureAdminLogTestAdmin();
+    $salesRep = User::factory()->create();
+    $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
+    $summaryType = CommunicationBlockType::query()->where('slug', CommunicationBlockType::SUMMARY)->sole();
+
+    $unreadLog = createAdminSubmittedLog($salesRep, $type, $summaryType, 'Unread nav badge summary.');
+    $readLog = createAdminSubmittedLog($salesRep, $type, $summaryType, 'Read nav badge summary.');
+    $readLog->readByUsers()->attach($admin->id, [
+        'read_at' => now(),
+    ]);
+
+    $this->actingAs($admin);
+
+    Livewire::test('admin-navigation-item')
+        ->assertSet('unreadLogCount', 1)
+        ->assertSee('Admin')
+        ->assertSee('1');
+
+    $unreadLog->readByUsers()->attach($admin->id, [
+        'read_at' => now(),
+    ]);
+
+    Livewire::test('admin-navigation-item')
+        ->assertSet('unreadLogCount', 0)
+        ->assertSee('0');
 });
 
 test('admin editor flyout opens submitted logs from the shared detail modal edit event', function () {

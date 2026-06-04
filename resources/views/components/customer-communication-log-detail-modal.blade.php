@@ -24,6 +24,11 @@ new class extends Component {
         $this->showLogDetails = true;
     }
 
+    public function viewLog(string $logId): void
+    {
+        $this->open($logId);
+    }
+
     #[On('close-communication-log-detail')]
     public function close(): void
     {
@@ -86,7 +91,7 @@ new class extends Component {
 
         $log = CustomerCommunicationLog::query()
             ->withTrashed()
-            ->with(['communicationType', 'updateRequest', 'updateResponses', 'user', 'blocks.blockType'])
+            ->with(['communicationType', 'updateRequest.updateRequester', 'updateResponses', 'user', 'blocks.blockType'])
             ->visibleToUsers()
             ->find($this->selectedLogId);
 
@@ -113,7 +118,7 @@ new class extends Component {
     {
         return CustomerCommunicationLog::query()
             ->withTrashed()
-            ->with(['communicationType', 'updateRequest', 'updateResponses', 'user', 'blocks.blockType'])
+            ->with(['communicationType', 'updateRequest.updateRequester', 'updateResponses', 'user', 'blocks.blockType'])
             ->visibleToUsers()
             ->findOrFail($logId);
     }

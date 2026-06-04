@@ -41,7 +41,7 @@ new class extends Component {
         $admin = $this->adminUser();
 
         $query = CustomerCommunicationLog::query()
-            ->with(['communicationType', 'user', 'blocks.blockType'])
+            ->with(['communicationType', 'updateRequest.updateRequester', 'user', 'blocks.blockType'])
             ->withExists([
                 'readByUsers as read_by_current_admin_exists' => fn ($query) => $query->where('users.id', $admin->id),
             ])
@@ -122,6 +122,7 @@ new class extends Component {
         Gate::authorize('view', $log);
 
         $this->markLogRead($log);
+        $this->dispatch('admin-unread-log-count-updated');
         unset($this->newCommunicationLogs);
 
         $this->dispatch('open-communication-log-detail', logId: $log->id);
@@ -133,6 +134,7 @@ new class extends Component {
 
         Flux::toast(variant: 'success', text: __('Log marked read.'));
 
+        $this->dispatch('admin-unread-log-count-updated');
         unset($this->newCommunicationLogs);
     }
 
@@ -146,6 +148,7 @@ new class extends Component {
 
         Flux::toast(variant: 'success', text: __('Log cleared.'));
 
+        $this->dispatch('admin-unread-log-count-updated');
         $this->dispatch('close-communication-log-detail');
         unset($this->newCommunicationLogs);
     }
@@ -161,6 +164,7 @@ new class extends Component {
 
         Flux::toast(variant: 'success', text: __('Log marked unread.'));
 
+        $this->dispatch('admin-unread-log-count-updated');
         unset($this->newCommunicationLogs);
     }
 
@@ -200,6 +204,7 @@ new class extends Component {
 
         $log->forceFill([
             'status' => CustomerCommunicationLog::STATUS_UPDATE_REQUESTED,
+            'update_requested_by_user_id' => Auth::id(),
         ])->save();
 
         Flux::toast(variant: 'success', text: __('Update requested.'));
@@ -218,6 +223,7 @@ new class extends Component {
         Flux::toast(variant: 'success', text: __('Log archived.'));
 
         $this->dispatch('close-communication-log-detail');
+        $this->dispatch('admin-unread-log-count-updated');
         $this->dispatch('communication-log-saved');
     }
 
@@ -285,6 +291,7 @@ new class extends Component {
     {
         return match ($slug) {
             CommunicationBlockType::SUMMARY => 'blue',
+            CommunicationBlockType::UPDATE => 'red',
             'suggestion' => 'purple',
             'warranty' => 'amber',
             'complaint' => 'red',
@@ -317,11 +324,18 @@ new class extends Component {
     {
         $classes = 'group cursor-pointer hover:bg-zinc-50 dark:hover:bg-white/5';
 
-        if ($log->requires_follow_up) {
+        if ($this->logProvidesUpdateForCurrentAdmin($log)) {
+            $classes .= ' bg-red-50/70 hover:bg-red-100/70 dark:bg-red-500/10 dark:hover:bg-red-500/15';
+        } elseif ($log->requires_follow_up) {
             $classes .= ' bg-amber-50/60 hover:bg-amber-100/70 dark:bg-amber-500/10 dark:hover:bg-amber-500/15';
         }
 
         return $classes;
+    }
+
+    public function logProvidesUpdateForCurrentAdmin(CustomerCommunicationLog $log): bool
+    {
+        return $log->updateRequest?->update_requested_by_user_id === $this->adminUser()->id;
     }
 
     public function readStateFilterLabel(): string
@@ -530,6 +544,9 @@ new class extends Component {
                                         @if ($log->requires_follow_up)
                                             <flux:badge size="sm" inset="top bottom" color="amber" icon="flag">{{ __('Follow-up') }}</flux:badge>
                                         @endif
+                                        @if ($this->logProvidesUpdateForCurrentAdmin($log))
+                                            <flux:badge size="sm" inset="top bottom" color="red" icon="exclamation-circle">{{ __('Update to your request') }}</flux:badge>
+                                        @endif
                                     </span>
                                 </flux:table.cell>
                                 <flux:table.cell align="end" wire:click.stop>
@@ -560,7 +577,12 @@ new class extends Component {
                                                         {{ __('Archived') }}
                                                     </flux:menu.item>
                                                 @else
-                                                    <flux:menu.item icon="archive-box" variant="danger" wire:click.stop="archiveLog('{{ $log->id }}')">
+                                                    <flux:menu.item
+                                                        icon="archive-box"
+                                                        variant="danger"
+                                                        wire:click.stop="archiveLog('{{ $log->id }}')"
+                                                        wire:confirm="Archive this log for all users? This removes it from active log views for everyone."
+                                                    >
                                                         {{ __('Archive') }}
                                                     </flux:menu.item>
                                                 @endif

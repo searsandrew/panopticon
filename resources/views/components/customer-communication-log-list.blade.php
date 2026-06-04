@@ -133,7 +133,7 @@ new class extends Component {
     public function communicationLogs(): Collection
     {
         return CustomerCommunicationLog::query()
-            ->with(['communicationType', 'user', 'blocks.blockType'])
+            ->with(['communicationType', 'updateRequest.updateRequester', 'updateResponses', 'user', 'blocks.blockType'])
             ->where('netsuite_customer_id', $this->customerId())
             ->where(function ($query): void {
                 $query->visibleToUsers()
@@ -157,7 +157,7 @@ new class extends Component {
         }
 
         $log = CustomerCommunicationLog::query()
-            ->with(['communicationType', 'user', 'blocks.blockType'])
+            ->with(['communicationType', 'updateRequest.updateRequester', 'updateResponses', 'user', 'blocks.blockType'])
             ->find($this->selectedLogId);
 
         if (! $log instanceof CustomerCommunicationLog || ! $this->logBelongsToCurrentCustomer($log) || $log->isDraft()) {
@@ -194,7 +194,7 @@ new class extends Component {
     public function summaryFor(CustomerCommunicationLog $log): string
     {
         $summary = $log->blocks
-            ->first(fn ($block): bool => $block->blockType?->slug === CommunicationBlockType::SUMMARY)
+            ->first(fn ($block): bool => in_array($block->blockType?->slug, [CommunicationBlockType::SUMMARY, CommunicationBlockType::UPDATE], true))
             ?->body;
 
         if (! is_string($summary) || trim($summary) === '') {
@@ -259,6 +259,7 @@ new class extends Component {
     {
         return match ($slug) {
             CommunicationBlockType::SUMMARY => 'blue',
+            CommunicationBlockType::UPDATE => 'red',
             'suggestion' => 'purple',
             'warranty' => 'amber',
             'complaint' => 'red',
@@ -283,7 +284,7 @@ new class extends Component {
     private function findLogForCurrentCustomer(string $logId): CustomerCommunicationLog
     {
         $log = CustomerCommunicationLog::query()
-            ->with(['communicationType', 'user', 'blocks.blockType'])
+            ->with(['communicationType', 'updateRequest.updateRequester', 'updateResponses', 'user', 'blocks.blockType'])
             ->findOrFail($logId);
 
         abort_unless($this->logBelongsToCurrentCustomer($log), 404);

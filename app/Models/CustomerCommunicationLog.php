@@ -32,6 +32,7 @@ use OwenIt\Auditing\Contracts\Auditable;
     'submitted_at',
     'last_autosaved_at',
     'update_requested_log_id',
+    'update_requested_by_user_id',
     'communication_block_type_id',
     'position',
     'body',
@@ -114,6 +115,14 @@ class CustomerCommunicationLog extends Model implements Auditable
     public function updateRequest(): BelongsTo
     {
         return $this->belongsTo(self::class, 'update_requested_log_id');
+    }
+
+    /**
+     * @return BelongsTo<User, CustomerCommunicationLog>
+     */
+    public function updateRequester(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'update_requested_by_user_id');
     }
 
     /**

@@ -66,7 +66,7 @@ new class extends Component {
     public function communicationLogs(): LengthAwarePaginator
     {
         return CustomerCommunicationLog::query()
-            ->with(['communicationType', 'updateRequest', 'updateResponses', 'user', 'blocks.blockType'])
+            ->with(['communicationType', 'updateRequest.updateRequester', 'updateResponses', 'user', 'blocks.blockType'])
             ->where('netsuite_customer_id', $this->customerId())
             ->where(function ($query): void {
                 $query->visibleToUsers()
@@ -342,6 +342,7 @@ new class extends Component {
     {
         return match ($slug) {
             CommunicationBlockType::SUMMARY => 'blue',
+            CommunicationBlockType::UPDATE => 'red',
             'suggestion' => 'purple',
             'warranty' => 'amber',
             'complaint' => 'red',
@@ -391,7 +392,7 @@ new class extends Component {
         }
 
         $log = CustomerCommunicationLog::query()
-            ->with(['communicationType', 'updateRequest', 'updateResponses', 'user', 'blocks.blockType'])
+            ->with(['communicationType', 'updateRequest.updateRequester', 'updateResponses', 'user', 'blocks.blockType'])
             ->find($this->selectedLogId);
 
         if (! $log instanceof CustomerCommunicationLog || ! $this->logBelongsToCurrentCustomer($log) || $log->isDraft()) {
@@ -568,7 +569,7 @@ new class extends Component {
     private function findLogForCurrentCustomer(string $logId): CustomerCommunicationLog
     {
         $log = CustomerCommunicationLog::query()
-            ->with(['communicationType', 'updateRequest', 'updateResponses', 'user', 'blocks.blockType'])
+            ->with(['communicationType', 'updateRequest.updateRequester', 'updateResponses', 'user', 'blocks.blockType'])
             ->findOrFail($logId);
 
         abort_unless($this->logBelongsToCurrentCustomer($log), 404);

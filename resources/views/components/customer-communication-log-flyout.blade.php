@@ -329,12 +329,26 @@ new class extends Component {
      */
     public function isSummaryBlock(array $block): bool
     {
-        return $block['communication_block_type_id'] === $this->summaryBlockType()->id;
+        return $block['communication_block_type_id'] === $this->primaryBlockType()->id;
     }
 
     public function blockTypeName(?string $blockTypeId): string
     {
         return (string) ($this->blockTypes->firstWhere('id', $blockTypeId)?->name ?? __('Note'));
+    }
+
+    public function blockTypeBadgeColor(?string $blockTypeId): string
+    {
+        return match ($this->blockTypes->firstWhere('id', $blockTypeId)?->slug) {
+            CommunicationBlockType::UPDATE => 'red',
+            CommunicationBlockType::SUMMARY => 'blue',
+            default => 'zinc',
+        };
+    }
+
+    public function blockTypeCanBeSelectedAsAdditional(CommunicationBlockType $type): bool
+    {
+        return ! in_array($type->slug, [CommunicationBlockType::SUMMARY, CommunicationBlockType::UPDATE], true);
     }
 
     public function flyoutHeading(): string
@@ -409,7 +423,7 @@ new class extends Component {
         ]);
 
         $log->blocks()->create([
-            'communication_block_type_id' => $this->summaryBlockType()->id,
+            'communication_block_type_id' => $this->primaryBlockType()->id,
             'position' => 0,
             'body' => '',
         ]);
@@ -554,7 +568,7 @@ new class extends Component {
 
         if ($summaryIndex === null || trim((string) ($this->blocks[$summaryIndex]['body'] ?? '')) === '') {
             throw ValidationException::withMessages([
-                'blocks.'.($summaryIndex ?? 0).'.body' => __('A summary is required.'),
+                'blocks.'.($summaryIndex ?? 0).'.body' => $this->primaryBlockRequiredMessage(),
             ]);
         }
     }
@@ -595,14 +609,14 @@ new class extends Component {
 
         array_unshift($this->blocks, [
             'id' => null,
-            'communication_block_type_id' => $this->summaryBlockType()->id,
+            'communication_block_type_id' => $this->primaryBlockType()->id,
             'body' => '',
         ]);
     }
 
     private function summaryBlockIndex(): ?int
     {
-        $summaryTypeId = $this->summaryBlockType()->id;
+        $summaryTypeId = $this->primaryBlockType()->id;
 
         foreach ($this->blocks as $index => $block) {
             if (($block['communication_block_type_id'] ?? null) === $summaryTypeId) {
@@ -638,9 +652,35 @@ new class extends Component {
         return $type;
     }
 
+    private function updateBlockType(): CommunicationBlockType
+    {
+        $type = CommunicationBlockType::query()
+            ->active()
+            ->where('slug', CommunicationBlockType::UPDATE)
+            ->first();
+
+        abort_unless($type !== null, 500, __('Communication block types have not been configured.'));
+
+        return $type;
+    }
+
+    private function primaryBlockType(): CommunicationBlockType
+    {
+        return $this->updateRequestLogId === null
+            ? $this->summaryBlockType()
+            : $this->updateBlockType();
+    }
+
+    private function primaryBlockRequiredMessage(): string
+    {
+        return $this->updateRequestLogId === null
+            ? __('A summary is required.')
+            : __('An update is required.');
+    }
+
     private function defaultAdditionalBlockType(): ?CommunicationBlockType
     {
-        return $this->blockTypes->firstWhere('slug', '!=', CommunicationBlockType::SUMMARY)
+        return $this->blockTypes->first(fn (CommunicationBlockType $type): bool => $this->blockTypeCanBeSelectedAsAdditional($type))
             ?? $this->blockTypes->first();
     }
 
@@ -811,11 +851,11 @@ new class extends Component {
                         <div wire:key="communication-block-{{ $index }}-{{ $block['id'] ?? 'new' }}" class="space-y-3 rounded-lg border border-zinc-200 p-4 dark:border-white/10">
                             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                 @if ($this->isSummaryBlock($block))
-                                    <flux:badge color="blue">{{ $this->blockTypeName($block['communication_block_type_id']) }}</flux:badge>
+                                    <flux:badge color="{{ $this->blockTypeBadgeColor($block['communication_block_type_id']) }}">{{ $this->blockTypeName($block['communication_block_type_id']) }}</flux:badge>
                                 @else
                                     <flux:select wire:model.live="blocks.{{ $index }}.communication_block_type_id" size="sm" class="sm:max-w-56" :aria-label="__('Note type')">
                                         @foreach ($this->blockTypes as $type)
-                                            @if ($type->slug !== \App\Models\CommunicationBlockType::SUMMARY)
+                                            @if ($this->blockTypeCanBeSelectedAsAdditional($type))
                                                 <flux:select.option value="{{ $type->id }}">{{ $type->name }}</flux:select.option>
                                             @endif
                                         @endforeach

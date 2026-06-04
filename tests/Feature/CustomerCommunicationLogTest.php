@@ -754,6 +754,7 @@ test('users can provide a linked update for requested logs', function () {
     $user = permittedSalesRep($this);
     $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
     $summaryType = CommunicationBlockType::query()->where('slug', CommunicationBlockType::SUMMARY)->sole();
+    $updateType = CommunicationBlockType::query()->where('slug', CommunicationBlockType::UPDATE)->sole();
 
     $requestedLog = CustomerCommunicationLog::factory()
         ->submitted()
@@ -781,6 +782,8 @@ test('users can provide a linked update for requested logs', function () {
         ->call('provideUpdate', $requestedLog->id)
         ->assertSet('showLogFlyout', true)
         ->assertSet('updateRequestLogId', $requestedLog->id)
+        ->assertSet('blocks.0.communication_block_type_id', $updateType->id)
+        ->assertSee('Update')
         ->set('blocks.0.body', 'Customer confirmed the warranty unit is being replaced.')
         ->call('submit')
         ->assertHasNoErrors()
@@ -792,7 +795,15 @@ test('users can provide a linked update for requested logs', function () {
         ->sole();
 
     expect($responseLog->blocks()->sole()->body)->toBe('Customer confirmed the warranty unit is being replaced.')
+        ->and($responseLog->blocks()->sole()->communication_block_type_id)->toBe($updateType->id)
         ->and($requestedLog->refresh()->status)->toBe(CustomerCommunicationLog::STATUS_SUBMITTED);
+
+    Livewire::test('customer-communication-log-detail-modal')
+        ->call('open', $responseLog->id)
+        ->assertSee('Provides update for requested log from')
+        ->assertSee('View Original Log')
+        ->call('viewLog', $requestedLog->id)
+        ->assertSet('selectedLogId', $requestedLog->id);
 });
 
 test('log history shows meaningful edits and hides autosave audits', function () {
