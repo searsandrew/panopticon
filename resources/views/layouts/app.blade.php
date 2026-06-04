@@ -11,6 +11,9 @@
                 <flux:navbar.item icon="layout-grid" :href="route('dashboard')" :current="request()->routeIs('dashboard')" wire:navigate>
                     {{ __('Dashboard') }}
                 </flux:navbar.item>
+                @if (auth()->user()?->isAdmin())
+                    <livewire:admin-navigation-item :key="'desktop-admin-navigation-item'" />
+                @endif
             </flux:navbar>
 
             <flux:spacer />
@@ -39,6 +42,9 @@
                     <flux:sidebar.item icon="layout-grid" :href="route('dashboard')" :current="request()->routeIs('dashboard')" wire:navigate>
                         {{ __('Dashboard')  }}
                     </flux:sidebar.item>
+                    @if (auth()->user()?->isAdmin())
+                        <livewire:admin-navigation-item surface="sidebar" :key="'mobile-admin-navigation-item'" />
+                    @endif
                 </flux:sidebar.group>
             </flux:sidebar.nav>
 

@@ -13,6 +13,7 @@ test('database seeder creates only production application seed data', function (
     expect(User::query()->where('email', 'test@example.com')->exists())->toBeFalse()
         ->and(CommunicationType::query()->where('slug', CommunicationType::PHONE)->exists())->toBeTrue()
         ->and(CommunicationBlockType::query()->where('slug', CommunicationBlockType::SUMMARY)->exists())->toBeTrue()
+        ->and(CommunicationBlockType::query()->where('slug', CommunicationBlockType::UPDATE)->exists())->toBeTrue()
         ->and(Role::query()->where('name', 'sales-rep')->exists())->toBeTrue()
         ->and(Permission::query()->where('name', 'communication-logs.create')->exists())->toBeTrue()
         ->and(Permission::query()->where('name', 'communication-logs.view-history')->exists())->toBeTrue()

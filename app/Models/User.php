@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Str;
@@ -32,10 +33,22 @@ class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
     {
         return [
             'email_verified_at' => 'datetime',
+            'last_login_at' => 'datetime',
             'netsuite_managed_sales_rep_ids' => 'array',
             'netsuite_user_id' => 'integer',
             'password' => 'hashed',
+            'previous_login_at' => 'datetime',
         ];
+    }
+
+    /**
+     * @return BelongsToMany<CustomerCommunicationLog, User>
+     */
+    public function readCommunicationLogs(): BelongsToMany
+    {
+        return $this->belongsToMany(CustomerCommunicationLog::class, 'customer_communication_log_reads')
+            ->withPivot('cleared_at', 'read_at')
+            ->withTimestamps();
     }
 
     /**
@@ -56,6 +69,16 @@ class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
     {
         return is_numeric($salesRepId)
             && in_array((int) $salesRepId, $this->netsuiteSalesRepScopeIds(), true);
+    }
+
+    public function isAdmin(): bool
+    {
+        $admins = config('panopticon.admin', '');
+
+        return collect(is_array($admins) ? $admins : explode(',', (string) $admins))
+            ->map(fn (string $email): string => Str::lower(trim($email)))
+            ->filter()
+            ->contains(Str::lower($this->email));
     }
 
     /**

@@ -44,6 +44,7 @@ class CommunicationLoggingSeeder extends Seeder
     {
         collect([
             ['name' => 'Summary', 'slug' => CommunicationBlockType::SUMMARY, 'sort_order' => 10],
+            ['name' => 'Update', 'slug' => CommunicationBlockType::UPDATE, 'sort_order' => 15],
             ['name' => 'Suggestion', 'slug' => 'suggestion', 'sort_order' => 20],
             ['name' => 'Warranty', 'slug' => 'warranty', 'sort_order' => 30],
             ['name' => 'Complaint', 'slug' => 'complaint', 'sort_order' => 40],

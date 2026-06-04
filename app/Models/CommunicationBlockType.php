@@ -19,6 +19,8 @@ class CommunicationBlockType extends Model implements Auditable
 
     public const SUMMARY = 'summary';
 
+    public const UPDATE = 'update';
+
     /**
      * @param  Builder<CommunicationBlockType>  $query
      * @return Builder<CommunicationBlockType>

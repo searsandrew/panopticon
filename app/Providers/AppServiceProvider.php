@@ -27,8 +27,7 @@ class AppServiceProvider extends ServiceProvider
         $this->configureDefaults();
 
         Gate::before(function ($user, $ability) {
-            $admins = explode(',', config('panopticon.admin'));
-            return in_array($user->id, $admins) ? true : null;
+            return $user->isAdmin() ? true : null;
         });
     }
 

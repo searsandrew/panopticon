@@ -1,14 +1,22 @@
 <?php
 
+use App\Services\NetSuite\NetSuiteSalesRepRepository;
+use Illuminate\Support\Facades\Auth;
 use Livewire\Component;
 
 new class extends Component
 {
     public ?int $netSuiteId;
 
+    /**
+     * @var array<int, array{id: int, name: string, email: string|null}>
+     */
+    public array $salesReps = [];
+
     public function mount(): void
     {
         $this->netSuiteId = Auth::user()->netsuite_user_id ?? null;
+        $this->salesReps = app(NetSuiteSalesRepRepository::class)->active();
     }
 
     public function updatedNetSuiteId()
@@ -30,16 +38,16 @@ new class extends Component
         :label="__('Masquerade')"
     />
     <flux:menu>
-        <flux:menu.radio.group wire:model.live="netSuiteId">
-            <flux:menu.radio value="513">{{ __('Andrew Sears') }}</flux:menu.radio>
-            <flux:menu.radio value="1562">{{ __('AVR Associates') }}</flux:menu.radio>
-            <flux:menu.radio value="736">{{ __('J&P HVAC Sales') }}</flux:menu.radio>
-            <flux:menu.radio value="1439">{{ __('Legacy Sales') }}</flux:menu.radio>
-            <flux:menu.radio value="839">{{ __('RCI Westek') }}</flux:menu.radio>
-            <flux:menu.radio value="1427">{{ __('Reacond Associates') }}</flux:menu.radio>
-            <flux:menu.radio value="959">{{ __('Steinmetz & Associates') }}</flux:menu.radio>
-            <flux:menu.radio value="1895">{{ __('Tiffany Boers') }}</flux:menu.radio>
-            <flux:menu.radio value="2214">{{ __('Tom Ruggles') }}</flux:menu.radio>
-        </flux:menu.radio.group>
+        @if ($salesReps === [])
+            <flux:menu.item disabled>{{ __('No sales reps found') }}</flux:menu.item>
+        @else
+            <flux:menu.radio.group wire:model.live="netSuiteId">
+                @foreach ($salesReps as $salesRep)
+                    <flux:menu.radio value="{{ $salesRep['id'] }}">
+                        {{ $salesRep['name'] }}
+                    </flux:menu.radio>
+                @endforeach
+            </flux:menu.radio.group>
+        @endif
     </flux:menu>
 </flux:dropdown>

@@ -66,10 +66,10 @@ new class extends Component {
     public function communicationLogs(): LengthAwarePaginator
     {
         return CustomerCommunicationLog::query()
-            ->with(['communicationType', 'user', 'blocks.blockType'])
+            ->with(['communicationType', 'updateRequest.updateRequester', 'updateResponses', 'user', 'blocks.blockType'])
             ->where('netsuite_customer_id', $this->customerId())
             ->where(function ($query): void {
-                $query->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
+                $query->visibleToUsers()
                     ->orWhere(function ($query): void {
                         $query
                             ->where('status', CustomerCommunicationLog::STATUS_DRAFT)
@@ -117,6 +117,20 @@ new class extends Component {
         $this->showLogHistory = false;
 
         $this->dispatch('open-communication-log-editor', logId: $log->id);
+    }
+
+    public function provideUpdate(string $logId): void
+    {
+        $log = $this->findLogForCurrentCustomer($logId);
+
+        Gate::authorize('view', $log);
+        Gate::authorize('create', CustomerCommunicationLog::class);
+
+        $this->selectedLogId = null;
+        $this->showLogDetails = false;
+        $this->showLogHistory = false;
+
+        $this->dispatch('provide-communication-log-update', logId: $log->id);
     }
 
     public function viewLogHistory(string $logId): void
@@ -287,12 +301,20 @@ new class extends Component {
 
     public function statusBadgeColor(CustomerCommunicationLog $log): string
     {
-        return $log->isDraft() ? 'zinc' : 'emerald';
+        return match ($log->status) {
+            CustomerCommunicationLog::STATUS_DRAFT => 'zinc',
+            CustomerCommunicationLog::STATUS_UPDATE_REQUESTED => 'red',
+            default => 'emerald',
+        };
     }
 
     public function statusLabel(CustomerCommunicationLog $log): string
     {
-        return $log->isDraft() ? __('Draft') : __('Submitted');
+        return match ($log->status) {
+            CustomerCommunicationLog::STATUS_DRAFT => __('Draft'),
+            CustomerCommunicationLog::STATUS_UPDATE_REQUESTED => __('Update requested'),
+            default => __('Submitted'),
+        };
     }
 
     public function followUpButtonLabel(CustomerCommunicationLog $log): string
@@ -320,6 +342,7 @@ new class extends Component {
     {
         return match ($slug) {
             CommunicationBlockType::SUMMARY => 'blue',
+            CommunicationBlockType::UPDATE => 'red',
             'suggestion' => 'purple',
             'warranty' => 'amber',
             'complaint' => 'red',
@@ -369,7 +392,7 @@ new class extends Component {
         }
 
         $log = CustomerCommunicationLog::query()
-            ->with(['communicationType', 'user', 'blocks.blockType'])
+            ->with(['communicationType', 'updateRequest.updateRequester', 'updateResponses', 'user', 'blocks.blockType'])
             ->find($this->selectedLogId);
 
         if (! $log instanceof CustomerCommunicationLog || ! $this->logBelongsToCurrentCustomer($log) || $log->isDraft()) {
@@ -546,7 +569,7 @@ new class extends Component {
     private function findLogForCurrentCustomer(string $logId): CustomerCommunicationLog
     {
         $log = CustomerCommunicationLog::query()
-            ->with(['communicationType', 'user', 'blocks.blockType'])
+            ->with(['communicationType', 'updateRequest.updateRequester', 'updateResponses', 'user', 'blocks.blockType'])
             ->findOrFail($logId);
 
         abort_unless($this->logBelongsToCurrentCustomer($log), 404);
@@ -769,50 +792,8 @@ new class extends Component {
 
     <flux:modal wire:model.self="showLogDetails" class="md:w-2xl">
         @if ($showLogDetails && $selectedLog = $this->selectedLog())
-            <div class="space-y-6">
-                <div class="space-y-3">
-                    <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                        <div class="space-y-1">
-                            <flux:heading size="lg">{{ __('Communication Log') }}</flux:heading>
-                            <flux:text>{{ $this->contactAtLabel($selectedLog) }}</flux:text>
-                        </div>
-
-                        <div class="flex flex-wrap gap-2">
-                            @if ($selectedLog->requires_follow_up)
-                                <flux:badge size="sm" color="amber" icon="flag">{{ __('Follow-up') }}</flux:badge>
-                            @endif
-                            <flux:badge size="sm" color="{{ $this->communicationTypeBadgeColor($selectedLog) }}">
-                                {{ $selectedLog->communicationType?->name ?? __('Unknown') }}
-                            </flux:badge>
-                            <flux:badge size="sm" color="{{ $this->statusBadgeColor($selectedLog) }}">
-                                {{ $this->statusLabel($selectedLog) }}
-                            </flux:badge>
-                        </div>
-                    </div>
-
-                    <dl class="grid gap-3 text-sm sm:grid-cols-2">
-                        <div>
-                            <dt class="text-zinc-500 dark:text-zinc-400">{{ __('Contact person') }}</dt>
-                            <dd class="text-zinc-900 dark:text-zinc-100">{{ $selectedLog->contact_person_name ?: __('N/A') }}</dd>
-                        </div>
-                        <div>
-                            <dt class="text-zinc-500 dark:text-zinc-400">{{ __('Logged by') }}</dt>
-                            <dd class="text-zinc-900 dark:text-zinc-100">{{ $selectedLog->user?->name ?? __('Unknown') }}</dd>
-                        </div>
-                    </dl>
-                </div>
-
-                <div class="space-y-4">
-                    @foreach ($this->selectedLogBlocks($selectedLog) as $block)
-                        <div class="space-y-3 rounded-lg border border-zinc-200 p-4 dark:border-white/10">
-                            <flux:badge size="sm" color="{{ $this->blockTypeBadgeColor($block->blockType?->slug) }}">
-                                {{ $block->blockType?->name ?? __('Note') }}
-                            </flux:badge>
-                            <div class="whitespace-pre-wrap text-sm leading-6 text-zinc-900 dark:text-zinc-100">{{ trim((string) $block->body) !== '' ? $block->body : __('No content') }}</div>
-                        </div>
-                    @endforeach
-                </div>
-
+            <x-customer-communication-log-detail :log="$selectedLog" :blocks="$this->selectedLogBlocks($selectedLog)">
+                <x-slot:actions>
                 <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div class="flex flex-wrap gap-2">
                         <flux:button
@@ -835,12 +816,18 @@ new class extends Component {
                         <flux:modal.close>
                             <flux:button type="button" variant="filled">{{ __('Close') }}</flux:button>
                         </flux:modal.close>
-                        <flux:button type="button" variant="primary" icon="pencil" wire:click="editLog('{{ $selectedLog->id }}')">
+                        @if ($selectedLog->isUpdateRequested())
+                            <flux:button type="button" variant="primary" icon="chat-bubble-left-right" wire:click="provideUpdate('{{ $selectedLog->id }}')">
+                                {{ __('Provide Update') }}
+                            </flux:button>
+                        @endif
+                        <flux:button type="button" variant="{{ $selectedLog->isUpdateRequested() ? 'ghost' : 'primary' }}" icon="pencil" wire:click="editLog('{{ $selectedLog->id }}')">
                             {{ __('Edit') }}
                         </flux:button>
                     </div>
                 </div>
-            </div>
+                </x-slot:actions>
+            </x-customer-communication-log-detail>
         @endif
     </flux:modal>
 

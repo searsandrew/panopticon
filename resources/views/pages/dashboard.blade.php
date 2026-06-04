@@ -67,10 +67,11 @@ new #[Title('Dashboard')] class extends Component {
             )
             ->values();
         $partitionedCustomers = $sortedCustomers->partition(
-            fn (array $customer): bool => $this->activeCustomerRequiresFollowUp($customer),
+            fn (array $customer): bool => $this->activeCustomerHasUpdateRequests($customer),
         );
         $customers = $partitionedCustomers[0]
-            ->concat($partitionedCustomers[1])
+            ->concat($partitionedCustomers[1]->filter(fn (array $customer): bool => $this->activeCustomerRequiresFollowUp($customer)))
+            ->concat($partitionedCustomers[1]->reject(fn (array $customer): bool => $this->activeCustomerRequiresFollowUp($customer)))
             ->values();
 
         $page = $this->getPage(self::ACTIVE_CUSTOMERS_PAGE);
@@ -207,6 +208,14 @@ new #[Title('Dashboard')] class extends Component {
     /**
      * @param  array<string, mixed>  $customer
      */
+    public function activeCustomerHasUpdateRequests(array $customer): bool
+    {
+        return (int) data_get($customer, 'update_request_count', 0) > 0;
+    }
+
+    /**
+     * @param  array<string, mixed>  $customer
+     */
     public function activeCustomerFollowUpLabel(array $customer): string
     {
         $count = (int) data_get($customer, 'follow_up_count', 0);
@@ -217,11 +226,23 @@ new #[Title('Dashboard')] class extends Component {
     /**
      * @param  array<string, mixed>  $customer
      */
+    public function activeCustomerUpdateRequestLabel(array $customer): string
+    {
+        $count = (int) data_get($customer, 'update_request_count', 0);
+
+        return trans_choice(':count update requested|:count updates requested', $count, ['count' => $count]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $customer
+     */
     public function activeCustomerRowClass(array $customer): string
     {
         $classes = 'group cursor-pointer hover:bg-zinc-50 dark:hover:bg-white/5';
 
-        if ($this->activeCustomerRequiresFollowUp($customer)) {
+        if ($this->activeCustomerHasUpdateRequests($customer)) {
+            $classes .= ' bg-red-50/70 hover:bg-red-100/70 dark:bg-red-500/10 dark:hover:bg-red-500/15';
+        } elseif ($this->activeCustomerRequiresFollowUp($customer)) {
             $classes .= ' bg-amber-50/70 hover:bg-amber-100/70 dark:bg-amber-500/10 dark:hover:bg-amber-500/15';
         }
 
@@ -257,8 +278,30 @@ new #[Title('Dashboard')] class extends Component {
     /**
      * @param  array<string, mixed>  $customer
      */
+    public function pipelineCustomerHasUpdateRequests(array $customer): bool
+    {
+        return (int) data_get($customer, 'update_request_count', 0) > 0;
+    }
+
+    /**
+     * @param  array<string, mixed>  $customer
+     */
+    public function pipelineCustomerUpdateRequestLabel(array $customer): string
+    {
+        $count = (int) data_get($customer, 'update_request_count', 0);
+
+        return trans_choice(':count update requested|:count updates requested', $count, ['count' => $count]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $customer
+     */
     public function pipelineCustomerLogButtonIcon(array $customer): ?string
     {
+        if ($this->pipelineCustomerHasUpdateRequests($customer)) {
+            return 'exclamation-circle';
+        }
+
         return $this->pipelineCustomerRequiresFollowUp($customer) ? 'flag' : null;
     }
 
@@ -397,7 +440,7 @@ new #[Title('Dashboard')] class extends Component {
         if ($includeLastLog) {
             $lastLogs = CustomerCommunicationLog::query()
                 ->whereIn('netsuite_customer_id', $customerIds)
-                ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
+                ->visibleToUsers()
                 ->selectRaw('netsuite_customer_id, max(contact_at) as last_log_at')
                 ->groupBy('netsuite_customer_id')
                 ->pluck('last_log_at', 'netsuite_customer_id');
@@ -405,7 +448,7 @@ new #[Title('Dashboard')] class extends Component {
 
         $submittedLogCounts = CustomerCommunicationLog::query()
             ->whereIn('netsuite_customer_id', $customerIds)
-            ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED)
+            ->visibleToUsers()
             ->selectRaw('netsuite_customer_id, count(*) as submitted_log_count')
             ->groupBy('netsuite_customer_id')
             ->pluck('submitted_log_count', 'netsuite_customer_id');
@@ -415,8 +458,7 @@ new #[Title('Dashboard')] class extends Component {
             ->where('requires_follow_up', true)
             ->where(function ($query) use ($includeDraftFollowUps): void {
                 $query->where(function ($query): void {
-                    $query
-                        ->where('status', CustomerCommunicationLog::STATUS_SUBMITTED);
+                    $query->visibleToUsers();
                 })->when($includeDraftFollowUps, function ($query): void {
                     $query->orWhere(function ($query): void {
                         $query
@@ -429,12 +471,20 @@ new #[Title('Dashboard')] class extends Component {
             ->groupBy('netsuite_customer_id')
             ->pluck('follow_up_count', 'netsuite_customer_id');
 
+        $updateRequestCounts = CustomerCommunicationLog::query()
+            ->whereIn('netsuite_customer_id', $customerIds)
+            ->where('status', CustomerCommunicationLog::STATUS_UPDATE_REQUESTED)
+            ->selectRaw('netsuite_customer_id, count(*) as update_request_count')
+            ->groupBy('netsuite_customer_id')
+            ->pluck('update_request_count', 'netsuite_customer_id');
+
         return collect($customers)
-            ->map(function (array $customer) use ($followUpCounts, $lastLogs, $submittedLogCounts): array {
+            ->map(function (array $customer) use ($followUpCounts, $lastLogs, $submittedLogCounts, $updateRequestCounts): array {
                 $customerId = (int) data_get($customer, 'customer_id');
                 $lastLogAt = $lastLogs->get($customerId);
                 $followUpCount = (int) $followUpCounts->get($customerId, 0);
                 $submittedLogCount = (int) $submittedLogCounts->get($customerId, 0);
+                $updateRequestCount = (int) $updateRequestCounts->get($customerId, 0);
 
                 if ($lastLogAt !== null) {
                     $customer['last_log_at'] = $lastLogAt;
@@ -443,6 +493,7 @@ new #[Title('Dashboard')] class extends Component {
                 $customer['submitted_log_count'] = $submittedLogCount;
                 $customer['follow_up_count'] = $followUpCount;
                 $customer['requires_follow_up'] = $followUpCount > 0;
+                $customer['update_request_count'] = $updateRequestCount;
 
                 return $customer;
             })
@@ -478,6 +529,18 @@ new #[Title('Dashboard')] class extends Component {
                         <flux:card wire:key="pipeline-customer-{{ data_get($customer, 'customer_id') }}" class="flex h-full flex-col justify-between gap-4">
                             <div class="space-y-2">
                                 <flux:heading size="md">{{ data_get($customer, 'companyname') ?: data_get($customer, 'entityid') }}</flux:heading>
+                                <div class="flex flex-wrap gap-2">
+                                    @if ($this->pipelineCustomerHasUpdateRequests($customer))
+                                        <flux:badge size="sm" color="red" icon="exclamation-circle">
+                                            {{ $this->pipelineCustomerUpdateRequestLabel($customer) }}
+                                        </flux:badge>
+                                    @endif
+                                    @if ($this->pipelineCustomerRequiresFollowUp($customer))
+                                        <flux:badge size="sm" color="amber" icon="flag">
+                                            {{ $this->activeCustomerFollowUpLabel($customer) }}
+                                        </flux:badge>
+                                    @endif
+                                </div>
                                 <div class="space-y-1">
                                     <flux:text>{{ data_get($customer, 'email') ?: __('No email on file') }}</flux:text>
                                     <flux:text>{{ data_get($customer, 'phone') ?: __('No phone on file') }}</flux:text>
@@ -582,6 +645,12 @@ new #[Title('Dashboard')] class extends Component {
                                             <flux:badge size="sm" inset="top bottom" color="{{ $this->activeCustomerCategoryBadgeColor($customer) }}">
                                                 {{ $this->activeCustomerCategoryLabel($customer) }}
                                             </flux:badge>
+
+                                            @if ($this->activeCustomerHasUpdateRequests($customer))
+                                                <flux:badge size="sm" inset="top bottom" color="red" icon="exclamation-circle">
+                                                    {{ $this->activeCustomerUpdateRequestLabel($customer) }}
+                                                </flux:badge>
+                                            @endif
 
                                             @if ($this->activeCustomerRequiresFollowUp($customer))
                                                 <flux:badge size="sm" inset="top bottom" color="amber" icon="flag">

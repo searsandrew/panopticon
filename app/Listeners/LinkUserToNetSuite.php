@@ -32,6 +32,10 @@ class LinkUserToNetSuite
             return;
         }
 
+        if ($event instanceof Login) {
+            $this->recordLogin($user);
+        }
+
         if ($user->netsuite_user_id !== null) {
             $managedSalesRepIds = $this->employees->managedSalesRepIdsForEmployee($user->netsuite_user_id);
 
@@ -56,5 +60,13 @@ class LinkUserToNetSuite
         ])->save();
 
         $user->assignRole('sales-rep');
+    }
+
+    private function recordLogin(User $user): void
+    {
+        $user->forceFill([
+            'previous_login_at' => $user->last_login_at,
+            'last_login_at' => now(),
+        ])->save();
     }
 }
