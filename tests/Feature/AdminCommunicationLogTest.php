@@ -229,6 +229,8 @@ test('admin navigation item shows unread log count', function () {
 
     Livewire::test('admin-navigation-item')
         ->assertSet('unreadLogCount', 1)
+        ->assertSeeHtml('data-admin-navigation-item')
+        ->assertSeeHtml('data-flux-navbar-items')
         ->assertSee('Admin')
         ->assertSee('1');
 
@@ -239,6 +241,10 @@ test('admin navigation item shows unread log count', function () {
     Livewire::test('admin-navigation-item')
         ->assertSet('unreadLogCount', 0)
         ->assertSee('0');
+
+    Livewire::test('admin-navigation-item', ['surface' => 'sidebar'])
+        ->assertSeeHtml('data-admin-navigation-item')
+        ->assertSeeHtml('data-flux-sidebar-item');
 });
 
 test('admin editor flyout opens submitted logs from the shared detail modal edit event', function () {

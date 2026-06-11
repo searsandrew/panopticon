@@ -36,26 +36,28 @@ new class extends Component {
 };
 ?>
 
-@if ($surface === 'sidebar')
-    <flux:sidebar.item
-        icon="key"
-        :href="route('admin.index')"
-        badge="{{ $this->unreadLogCount }}"
-        :current="request()->routeIs('admin.*')"
-        wire:navigate
-        wire:poll.30s
-    >
-        {{ __('Admin') }}
-    </flux:sidebar.item>
-@else
-    <flux:navbar.item
-        icon="key"
-        :href="route('admin.index')"
-        badge="{{ $this->unreadLogCount }}"
-        :current="request()->routeIs('admin.*')"
-        wire:navigate
-        wire:poll.30s
-    >
-        {{ __('Admin') }}
-    </flux:navbar.item>
-@endif
+<div class="contents" data-admin-navigation-item>
+    @if ($surface === 'sidebar')
+        <flux:sidebar.item
+            icon="key"
+            :href="route('admin.index')"
+            badge="{{ $this->unreadLogCount }}"
+            :current="request()->routeIs('admin.*')"
+            wire:navigate
+            wire:poll.30s
+        >
+            {{ __('Admin') }}
+        </flux:sidebar.item>
+    @else
+        <flux:navbar.item
+            icon="key"
+            :href="route('admin.index')"
+            badge="{{ $this->unreadLogCount }}"
+            :current="request()->routeIs('admin.*')"
+            wire:navigate
+            wire:poll.30s
+        >
+            {{ __('Admin') }}
+        </flux:navbar.item>
+    @endif
+</div>
