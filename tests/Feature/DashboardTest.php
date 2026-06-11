@@ -165,6 +165,7 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
             && (int) ($queryParams['offset'] ?? -1) === $offset
             && str_contains($suiteQl, 'CUSTOMLIST_PANOPTICON_CADENCE_OPTIONS')
             && str_contains($suiteQl, 'c.custentity3 AS account_number')
+            && str_contains($suiteQl, "c.isinactive = 'F'")
             && str_contains($suiteQl, 'c.custentity_panopticon_sales_pipeline AS pipeline_owner_id')
             && str_contains($suiteQl, 'c.custentity_panopticon_sales_pipeline IN (2214)');
     };
@@ -184,6 +185,7 @@ test('authenticated users can visit the dashboard and see pipeline prospects abo
             && str_contains($suiteQl, 'BUILTIN.DF(c.category) AS category_name')
             && str_contains($suiteQl, 'c.custentity_panopticon_comm_cadence AS cadence_id')
             && str_contains($suiteQl, 'cadence.scriptid AS cadence_scriptid')
+            && str_contains($suiteQl, "c.isinactive = 'F'")
             && str_contains($suiteQl, 'c.salesrep IN (2214)');
     };
 

@@ -112,7 +112,45 @@ test('customers are opened by account number and show the communication log tabl
 
     expect(CustomerCommunicationLog::query()->count())->toBe(0);
 
-    Http::assertSent(fn (Request $request): bool => str_contains((string) ($request->data()['q'] ?? ''), "c.custentity3 = 'A-0999'"));
+    Http::assertSent(fn (Request $request): bool => str_contains((string) ($request->data()['q'] ?? ''), "c.custentity3 = 'A-0999'")
+        && str_contains((string) ($request->data()['q'] ?? ''), "c.isinactive = 'F'"));
+});
+
+test('inactive customers cannot be opened while their existing communication logs are retained', function () {
+    configureBriarRoseForCustomerLogTests();
+
+    Http::preventStrayRequests();
+    Http::fake([
+        '*' => Http::response([
+            'items' => [],
+            'hasMore' => false,
+        ]),
+    ]);
+
+    $user = permittedSalesRep($this);
+    $type = CommunicationType::query()->where('slug', CommunicationType::PHONE)->sole();
+
+    $log = CustomerCommunicationLog::factory()
+        ->submitted()
+        ->for($user)
+        ->for($type, 'communicationType')
+        ->create([
+            'netsuite_customer_id' => 286,
+            'customer_account_number' => 'C-0035',
+            'customer_name' => 'CENTRAL WHOLESALERS Closed',
+        ]);
+
+    $this->actingAs($user)
+        ->get(route('customers.show', ['accountNumber' => 'C-0035']))
+        ->assertNotFound();
+
+    expect($log->fresh())
+        ->not->toBeNull()
+        ->customer_account_number->toBe('C-0035')
+        ->customer_name->toBe('CENTRAL WHOLESALERS Closed');
+
+    Http::assertSent(fn (Request $request): bool => str_contains((string) ($request->data()['q'] ?? ''), "c.custentity3 = 'C-0035'")
+        && str_contains((string) ($request->data()['q'] ?? ''), "c.isinactive = 'F'"));
 });
 
 test('customer page shows purchase history and new product gaps from NetSuite', function () {
